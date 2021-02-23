@@ -1,0 +1,158 @@
+---
+title: "Simple Linear Regression: Inference, Prediction, Explanation"
+author: "Christian Thieme"
+date: "2/17/2021"
+output: rmdformats::robobook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(faraway)
+```
+
+## A Modern Approach to Regression with R
+
+#### **Exercise 2.3**
+
+**The manager of the purchasing department of a large company would like to develop a regression model to predict the average amount of time it takes to process a given number of invoices. Over a 30-day period, data are collected on the number of invoices processed and the total time taken (in hours). The data are available on the book web site in the file invoices.txt. The following model was fit to the data:** $Y=\beta_{0}+\beta_{1}+e$ **where** $Y$ **is the processing time and** $x$ **is the number of invoices. A plot of the data and the fitted model can be found in Figure 2.7. Utilizing the output from the fit of this model provided below, complete the following tasks.**
+
+*   **a. Find a 95% confidence interval for the start-up time, i.e.,** $\beta_{0}$**.**
+
+Here we will be looking to build a 95% confidence interval for the Y-intercept. 
+
+```{r message=FALSE, warning=FALSE}
+invoices <- read_tsv('https://gattonweb.uky.edu/sheather/book/docs/datasets/invoices.txt')
+```
+
+```{r message=FALSE, warning=FALSE}
+ggplot(invoices) + 
+  aes(x = Invoices, y = Time) + 
+  geom_point() + 
+  ylab("Processing Time") + 
+  xlab("Number of Invoices") + 
+  geom_smooth(method = lm, se = FALSE)
+```
+```{r}
+model <- lm(Time ~ Invoices, data = invoices)
+
+summary(model)
+```
+We can use the output above to calculate the confidence interval by hand: 
+
+```{r}
+t_value <- qt(0.975, df = 28)
+se <- 0.1222707
+
+0.6417099 + c(-1,1) * t_value * se
+```
+We can see that the confidence interval above does not include zero, so we would reject the null hypothesis that the intercept is equal to 0 (if we were running that test). Alternately, we can use the `confint` function to calculate the same values. 
+
+```{r}
+confint(model, level = 0.95)[1,]
+```
+The 95% confidence interval for $\beta_{0}$ is (0.3912496,0.8921701). This means that we can expect to find the actual Y-intercept within this range 95% of the time if we drew random samples. As you can see, it is a very wide range. We would expect that as we only had 30 samples in our dataset. The more samples we include, the more narrow our confidence interval would be. 
+
+* **b. Suppose that a best practice benchmark for the average processing time for an additional invoice is 0.01 hours (or 0.6 minutes). Test the null hypothesis** $H_{0}:\beta_{1}=0.01$ **against a two-sided alternative. Interpret your result.** 
+
+Similar to above, we can calculate the the confidence interval for a given confidence. For our first test, we'll use a 95% confidence interval: 
+
+```{r}
+t_value <- qt(0.975, df = 28)
+se <- 0.0008184
+
+0.0112916 + c(-1,1) * t_value * se
+```
+The value 0.01 falls within the confidence interval, so we would fail to reject the null hypothesis and say that there is no significant evidence that the average processing time is different than the benchmark. Now, let's see if this result changes if we move to a 99% confidence interval:
+
+```{r}
+t_value <- qt(0.995, df = 28)
+se <- 0.0008184
+
+0.0112916 + c(-1,1) * t_value * se
+```
+It looks like our value of 0.01 still falls within our confidence interval, so our previous conclusion would not change. 
+
+* **c. Find a point estimate and a 95% prediction interval for the time taken to process 130 invoices.**
+
+To solve this manually, we can use the estimates from the model output above: 
+
+```{r}
+intercept <- 0.6417099
+invoice_slope <- 0.0112916
+invoice_num <- 130
+
+
+point_estimate <- intercept + (invoice_slope * invoice_num)
+
+df = 28
+
+t_value <- qt(0.975, df = df)
+rse <- 0.3298
+rss <- rse ^2 * df
+
+point_estimate + c(-1,1) * t_value * se
+```
+We can find our prediction point as well as our confidence interval dynamically with this line of code: 
+```{r}
+predict(model, data.frame(Invoices = 130), interval = "prediction")
+```
+## Linear Models with R
+
+#### **Exercise 3.4**
+
+Using the `sat` data:
+
+* **a. Fit a model with `total` sat score as the response and `expend`, `ratio` and `salary` as predictors. Test the hypothesis that $\beta_{salary}=0$. Test the hypothesis that $\beta_{salary}=\beta_{ratio}=\beta_{expend}=0$. Do any of these predictors have an effect on the response?** 
+
+```{r}
+head(sat)
+```
+
+First, we'll test the hypothesis that $\beta_{salary}=0$. In order to test this hypothesis, we'll initialize a model with all of the predictors. 
+
+```{r}
+model1 <- lm(total ~ expend + ratio + salary, data = sat)
+summary(model1)
+```
+Next, we'll initialize another model, but this time, we'll remove salary from the model and then run an anova over the data:
+
+```{r}
+model2 <- lm(total ~ expend + ratio, data = sat)
+anova(model2, model1)
+```
+Looking at the above output, we can see the p-value of 0.06667 is above 0.05. We will fail to reject the null hypothesis and conclude that there is not significant evidence to say the corresponding parameter for salary is not 0. 
+
+Now, let's test the hypothesis that $\beta_{salary}=\beta_{ratio}=\beta_{expend}=0$. To do this, we'll initialize the null model and use the `anova` function:
+
+```{r}
+nullmod <- lm(total ~ 1, data = sat)
+anova(nullmod, model1)
+```
+Looking at the p-value above of 0.01209, we will reject the null hypothesis and say that there is evidence that at least one of these coefficients is not 0. 
+
+* **b. Now add `takers` to the model. Test the hypothesis that $\beta_{takers}=0$. Compare this model to the previous one using an F-test. Demonstrate that the F-test and t-test here are equivalent.**  
+
+```{r}
+model4 <- lm(total ~ expend + ratio + salary + takers, data = sat)
+
+anova(model1, model4)
+
+```
+Looking at the output of the anova, we would reject the null hypothesis that the coefficient for takers is equal to zero. 
+
+The F-statistic for this test is 157.74. If we calculate the t-statistic and square it, we will get the F-statistic. The to values from the F-statistic and t-statistic are equal within rounding error. 
+
+```{r}
+tstat <- (-2.9045 - 0)/0.2313
+tstat^2
+```
+```{r}
+2*pt(tstat, 45)
+```
+
+
+
+
+
+
