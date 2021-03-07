@@ -1,0 +1,663 @@
+---
+title: 'HW1: Moneyball Multiple Regression'
+author: "Critical Thinking Group One"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: no
+    theme: cerulean
+    highlight: tango
+    font-family: Arial
+  pdf_document:
+    toc: yes
+---
+
+## AUTHORSHIP
+**Critical Thinking Group 1: Angel Claudio, Bonnie Cooper, Manolis Manoli, Magnus Skonberg, Christian Thieme and Leo Yi**
+
+![](https://microframecorp.com/assets/images/baseball_field.jpg){width=150%}
+```{r setup, include=FALSE}
+# A.C. Echo set to auto false since professor interested in results only.
+knitr::opts_chunk$set(echo = F, warning = F, eval = T) 
+
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(car)
+library(VIM)
+library(corrplot)
+library(mice)
+library(leaps)
+library(tidyverse)
+library(tidymodels)
+library(vip)
+
+
+options(scipen = 9)
+set.seed(123)
+```
+
+```{r message=FALSE, warning=FALSE}
+test <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw1/moneyball-evaluation-data.csv')
+train <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw1/moneyball-training-data.csv')
+```
+
+<br><br>
+
+## BACKGROUND
+
+### On Sabermetrics
+
+&nbsp;&nbsp;&nbsp;&nbsp;Statistics have played a role in quantifying baseball since Henry Chadwick introduced the box score in 1858. The box score was adopted from cricket scorecards and introduced metrics such as the batting average and earned run average which are still used in analytics to this day. However, the statistics of baseball saw little change until the late 20th century with the advent of sabermetrics.  
+&nbsp;&nbsp;&nbsp;&nbsp;Sabermetrics introduced a new approach to evaluating baseball and baseball athletes. For instance, the classic approach for weighing a players worth was measured with Batting Average statistics. However, sabermetrics no longer weighed a player only by his direct production but incorporated metrics to describe the players ability to create run opportunities for the team. Sabermetrics was largely marginalized by major league teams which relied primarily on scouts to find talent. This all changed when the Oakland A's began to levy sabermetric principles to fill out their rosters in the 1990s. Ultimately the A's approach is attributed to a 20 game win streak in the 2002 season. At the time, a streak of this length was unprecedented for modern major league baseball. The Oakland A's achievements were celebrated in the book Moneyball (later made to a movie) and advanced analytics became the mainstay for assessing new talent and quantifying althete and team performance.  
+&nbsp;&nbsp;&nbsp;&nbsp;
+
+![](https://www.library.georgetown.edu/sites/default/files/baseball-after.jpg) 
+
+### Our Approach
+
+&nbsp;&nbsp;&nbsp;&nbsp;In the following analysis, we will use sabermetric principles to explore, analyze and model a data set that describes team performance in a given year. The purpose of the assignment is to build a multiple linear regression model on the training data to predict the number of wins for the teams provided in a given baseball season.
+
+* Each record represents a professional baseball team from the years 1871 to 2006 inclusive. 
+* Each record has the performance of the team for the given year, with all statistics adjusted to match the performance of a 162 game season.
+
+The following table describes the data set feature variables in detail.  
+
+
+| Variable Name    | Definition                         | Theoretical Effect      |
+|------------------|------------------------------------|-------------------------|
+| team_batting_h   | Base hits by batters (1b,2b,3b,hr) | Positive impact on Wins |
+| team_batting_2b  | Doubles by batters (2b)            | Positive impact on Wins |
+| team_batting_3b  | Triples by batters (3b)            | Positive impact on Wins |
+| team_batting_hr  | Homeruns by batters (hr)           | Positive impact on Wins |
+| team_batting_bb  | Walks by batters                   | Positive impact on Wins |
+| team_batting_hbp | Batters hit by pitch               | Positive impact on Wins |
+| team_batting_so  | Strikeouts by batters              | Negative impact on Wins |
+| team_baserun_sb  | Stolen bases                       | Positive impact on Wins |
+| team_baserun_cs  | Caught stealing                    | Negative impact on Wins |
+| team_fielding_e  | Errors                             | Negative impact on Wins |
+| team_fielding_dp | Double plays                       | Positive impact on Wins |
+| team_pitching_bb | Walks allowed                      | Negative impact on Wins |
+| team_pitching_h  | Hits allowed                       | Negative impact on Wins |
+| team_pitching_hr | Homeruns allowed                   | Negative impact on Wins |
+| team_pitching_so | Strikeouts by pitchers             | Positive impact on Wins |
+
+
+&nbsp;&nbsp;&nbsp;&nbsp;The goal of our modeling approach is to find an optimal multiple linear regression model that utilizes this feature set to predict the number of games won assuming a 162 game season. Working with a training data set, we begin by importing the data and performing a basic EDA and visualization. Following, the data is prepared for further analysis by a series of transformations (e.g. to account for missing data and collinearity). We then take an incremental modeling approach to (1) Begin with all model features included (kitchen sink model), (2) Remove outliers & retrain the model and (3) Remove impertinent features from the model. Finally, model performance is evaluated on a separate test data set.  
+
+
+<br><br>
+
+## 1. DATA EXPLORATION
+
+We utilize the built-in `glimpse()` method to gain insight into the dimensions, variable characteristics, and value range for our training dataset:
+
+```{r}
+glimpse(train)
+#summary(train) 
+```
+
+We can see above the training data set has:
+
+* **`r ncol(train)`** features, all of which are of data type integer.
+* **`r nrow(train)`** observations.
+* Features with **NA** values that are candidates for imputation or exclusion (ie. team_batting_hbp, team_baserun_cs).
+* An ***index*** feature which may also be excluded.
+
+Per the final two notes above, we clean the original data before moving on to EDA: 
+
+* Converting columns to ***lower case*** for personal manageability.
+* Dropping the ***index*** feature from the training data set since we will not be using it.
+
+```{r data-clean-up, eval = T}
+# remove row index field
+train <- dplyr::select(train, -INDEX)
+
+# work with lowercase field names
+names(train) <- lapply(names(train), tolower)
+names(test) <- lapply(names(test), tolower)
+
+```
+
+```{r visual-post-data-clean-up, eval = T, include = F }
+#a sample view of the training data after the clean up:
+head(train)
+```
+
+
+### Variable Distributions
+
+After taking a high level overview of the data, we can now investigate it in greater depth. We can seek anomalies, patterns, and otherwise visualize and analyze our data so that we might chart a better course when feature engineering and comparing models.
+
+```{r eda, eval = T}
+#visualize feature distributions
+ggplot(gather(train, variable, value), aes(x=value)) + stat_density() +
+  facet_wrap(~variable, scales = "free")
+```
+
+From the plots above, there are a number of points to highlight:
+
+* target_wins, team_batting_h each appear to have a **normal distrution**,
+* team_baserun_cs, team_baserun_sb, team_batting_3b each appear to be **right skewed normal**,
+* team_batting_bb appears to be **left skewed normal**,
+* team_batting_hr, team_batting_so, and team_pitching_hr appear to be **bimodal**,
+* team_batting_hbp appears to be arguably **multimodal**,
+* and remaining variables do not appear to have normal distributions. We may either deal with outliers / perform transformations to gain greater insight or discount these variables altogether from consideration from our model.
+
+### Variable Correlation
+
+With target_wins as our dependent variable and an idea of each variable's distribution, as a next step we can visualize the correlation between our independent variables and our dependent variable :
+
+```{r view-predictors, fig.height=6, fig.width=10}
+# scatter plot all explanatory variables against response
+tall <- gather(train, metric, value, -target_wins)
+
+ggplot(tall, aes(x = value, y = target_wins)) +
+  geom_point(alpha = .2) +
+  geom_smooth(method = 'lm', se = FALSE) +
+  facet_wrap(~metric, scales = 'free')
+```
+
+From our regression visualizations above, we observe:
+
+* team_baserun_cs and team_batting_hbp appear to be non-correlated and thus likely candidates for our exclusion from a model.
+* a **strong positive correlation** between team_batting_h, team_pitching_bb and our dependent variable target_wins.
+* a **positive correlation** between team_baserun_sb, team_batting_2b, team_batting_3b, team_batting_bb, team_batting_hr, and target_wins although some of these correlations aren’t very strong and it’d be tough to judge based on these plots whether or not the variables are worth keeping in the model.
+* a **strong negative correlation** between team_pitching_h, team_pitching_so and our dependent variable target_wins.
+* a **negative correlation** between team_fielding_e and target_wins although it’s tough to judge on this plot alone whether the variable is worth keeping in our model.
+* **outliers**, that we'll likely need to take care of, affecting the fit line for team_pitching_bb, team_pitching_h, and team_pitching_so.
+
+We've observed our data at a high level, familiarized ourselves with the variable distributions and correlations and are prepared, at this point, to tidy and transform our data.
+
+<br><br>
+
+## 2. DATA PREPARATION
+
+With insights gained via EDA (exploratory data analysis), we can now handle NA values, drop inessential variables, impute missing values, and otherwise transform our dataset into a form more favorable for analysis.
+
+### Handling NA Values
+
+Being that we noticed NA values in our preliminary investigation of the dataset, we'll explore further to probe the level of severity and plot a proper response (imputation or exclusion):
+
+```{r}
+#summarize missing data totals by feature
+colSums(is.na(train))
+```
+
+```{r na-assessment, eval=T}
+#visualize missing data by feature as well as patterns of missing data across features
+mice_plot <- VIM::aggr(train, col=c('green','red'),
+                    numbers=TRUE, sortVars=TRUE, only.miss = TRUE,
+                     cex.axis=.55,
+                    gap=3, ylab=c("Missing Data","Pattern"))
+```
+
+team_batting_hbp and team_baserun_cs raise red flags due to their high NA counts of 2085/2276 (~92%) and 772/2276 (~34%) respectively. We'll exclude team_batting_hbp from consideration for the simple fact that the majority of its data is missing and we'll carry team_baserun_cs to see if imputing values proves to be an effective remedy. 
+
+Remaining variables do not have nearly the same magnitude of NA values and thus imputation appears to be a better route than exclusion.
+
+### Feature Exclusions
+
+We had previously identified that ***index*** and ***team_batting_hbp*** would be excluded. ***index*** because it was a non-valuable variable and ***team_batting_hbp*** because more than 90% of its data was missing. Being that ***index*** already was during data pre-processing, we exclude ***team_batting_hbp*** from our training and test sets below:
+
+```{r perform-exclusions-1, eval=T}
+#exclude team_batting_hbp from test & train
+train <- dplyr::select(train, -c(team_batting_hbp))
+test <-  dplyr::select(test, -c(team_batting_hbp))
+```
+
+Prior to excluding the bi-modal distributions identified earlier (**team_batting_hr**, **team_batting_so**, and **team_pitching_hr**), we verify their predictive power.
+
+We apply a 'kitchen sink' multinomial linear regression model, accounting for all independent variables, and interpret associated p-values to judge predictive capability: 
+
+```{r model-summary-1, eval=T}
+#multiple lm w/all feature variables
+l.model <- lm(data = train, target_wins ~ .)
+summary(l.model)
+```
+
+Based on the high p-values we see above for our bi-modal distributions (**team_batting_hr**, **team_batting_so**, and **team_pitching_hr**), it appears that these features do not play a significant role in predicting team wins and thus there's reason for exclusion. With these variables in mind, we'll move on to imputation and dealing with multicollinearity to confirm the effect eliminating one variable may have on the performance of our model vs. eliminating them all at once.
+
+### Imputation
+
+From excluding variables and simplifying the breadth of our models consideration, we move on to accounting for missing values. 
+
+From the mice library, we impute using the **pmm** method (predictive mean matching):
+
+```{r impute-train-2, eval=T, message=F, results='hide'}
+#apply predictive mean matching to train
+train <- mice(data = train, m = 1, method = "pmm", seed = 500)
+train <- mice::complete(train, 1)
+#apply predictive mean matching to test
+test <- mice(data = test, m = 1,  method = "pmm", seed = 500)
+test <- mice::complete(test, 1)
+```
+Predictive mean matching calculates the predicted value for our target variable, and, for missing values, forms a small set of “candidate donors” from the complete cases that are closest to the predicted value for our missing entry. Donors are then randomly chosen from candidates and imputed where values were once missing. *To apply pmm we assume that the distribution is the same for missing cells as it is for observed data, and thus, the approach may be more limited when the % of missing values is higher.*
+
+Once we've imputed missing values into our training dataset and returned the data in proper form, we verify whether our operation was successful:
+
+```{r}
+#verify absence of NA values in the dataset
+colSums(is.na(train))
+```
+
+The presence of all 0's above confirms the success of imputation.
+
+### Dealing with Multicollinearity
+
+For a given predictor, multicollinearity can be measured by computing the associated variance inflation factor (VIF). The VIF measures the inflation of our regression coefficient due to multicollinearity.
+
+The smallest possible value of VIF is 1 (no multicollinearity) whereas values in excess of 5 or 10 are indicative that we may have a problem. When faced with multicollinearity, the problematic variables should be removed since they are redundant in the presence of the other variables in our model.
+
+To deal with multicollinearity, we check VIF values:
+
+```{r, eval=T}
+#display VIF values for each feature variable
+l.model <- lm(data = train, target_wins ~ .)
+car::vif(l.model)
+```
+
+There's quite a bit of multicollinearity present in our model as indicated by the five variables with a VIF value in excess of 5 and the two variables in far excess of 10.
+
+In order to fix the dependency between variables we remove the variable with the highest VIF score, **team_batting_hr**, and revisit our VIF scores again to verify that multicollinearity has been addressed:
+
+```{r exclude-bi-new2,eval=T}
+#remove the feature 'team_batting_hr' from train & test
+train <- dplyr::select(train, -c(team_batting_hr))
+test <-  dplyr::select(test, -c(team_batting_hr))
+
+#display VIF values for feature variables
+l.model <- lm(data = train, target_wins ~ .)
+car::vif(l.model)
+```
+
+Multi-collinearity appears to be present to a much lesser degree after our exclusion of the aforementioned variable. There are now only three variables whose VIF scores exceed 5 and they do so to a very minor degree. Thus, we'll carry all variables forward into the model-building phase.
+
+<br><br>
+
+## 3. MODEL BUILDING & SELECTION
+
+We started with 16 independent variables, excluded **index** (irrelevant), **team_batting_hbp** (high NA %), and **team_batting_hr** (multicollinearity) to widdle variables still within consideration down to 13.
+
+At this point we've explored and prepared our data and are ready to build and assess different models. We'll take an approach of incremental improvement (or kaizen):
+
+* **Model 1** (l.model): the 'kitchen sink' model that accounts for all 13 variables, 
+* **Model 2** (l.model2): the removal of apparent outliers, and
+* **Model 3** (l.model3): the removal of impertinent features.
+
+### Model 1
+
+Let's start by applying regression to all variables still within consideration:
+
+```{r final-model}
+#display summary for Model 1: all inclusive (kitchen sink) model
+summary(l.model)
+```
+We can interpret the coefficients of our model as follows:
+
+* **positive coefficients**: team_batting_h, team_batting_3b, team_batting_bb, team_baserun_sb, and team_pitching_so make sense in the context of a team having a winning record. We can imagine that hitting the ball, getting walked, stealing a base, and striking out the opposing team would all positively impact a team's chance in winning the game. On the flip-side, the positive coefficients for team_pitching_h (hits against) and team_pitching_hr (home runs against) don't appear to make sense because we wouldn't want the other team to get on base or hit a home run. These coefficients raise red flags.
+* **negative coefficients**: negative coefficients for team_batting_so, team_baserun_cs, team_pitching_bb, team_fielding_e make sense. We can imagine being struck out, caught stealing, walking the opposing team, and making fielding errors adversely effecting a team's ability to win. The negative coefficients for team_batting_2b (getting to 2nd base) and team_fielding_dp (getting a double play) don't make sense, since we'd expect getting further on base and making an exceptional play to positively rather than negatively impact a team's ability to win.
+
+Moving on to the summary statistics relevant to model assessment:
+
+* **p-values**: while the majority of variables under consideration do appear to play a significant role in predicting wins, the relatively high p-values associated with team_baserun_cs, team_batting_3b, and team_pitching_bb are indicative that these variables may be excluded,
+* **RSE**: being that a lower value is typically better, our RSE value appears to be OK. The residual standard error provides indication of how far (on average) our residuals are from the fit line and we'll keep an eye on this metric as we tune the model.
+* **F-statistic**: the f-statistic provides a measure of variability between groups over variability within each group. Typically, a higher value is stronger evidence in favor of a model's efficacy and our value appears to be promising. 
+* **Adj. $\mbox{R}^2$**: typically values near 1 are indicative of a strong model. Our low value is concerning and indicative of a weak model. With this said, each dataset has nuance and the adjusted $\mbox{R}^2$ does not provide any sort of final decision on the validity of a model. *Thus, visualizations and all model statistics (in conjunction) are to be considered when tuning a model.*
+
+Let's turn our eye to the diagnostics for our 1st model:
+
+```{r fig.height=7, fig.width=10}
+#display Model 1 diagnostic plots
+layout(matrix(c(1,2,3,4),2,2))
+plot(l.model)
+```
+
+We can interpret the residual plots as follows:
+
+* **residuals vs. fitted**: our data are not equally dispersed but there doesn't appear to be an unaccounted for non-linear pattern to our data. The line is relatively straight and influential outliers are marked (427, 859, 2012).
+
+* **scale-location**: our data are not equally dispersed and thus there may be reason to hold concern regarding homoscedasticity but the line is relatively horizontal. The slight curvature might improve if we deal with the influential outliers (859, 1342, 2012)
+
+* **normal Q-Q**: with influential outliers marked (859, 1342, 2012) and our data ing a relatively straight line, our normal Q-Q plot is promising.
+
+* **residuals vs. leverage**: this plot helps identify influential cases (1242, 1584, 2136) which may alter the trend of our regression line. Dealing with these cases, and others like them, may improve our fit.
+
+From the summary statistics and residuals plots of model 1, we gather that the next step for improving our model would be to deal with influential outliers.
+
+### Model 2
+
+For model 2, we'll see if we removing these leverage points improves our model: 
+
+```{r perform-exclusions-2, eval=T}
+#remove leverage points from train data set
+train <- train[c(-2136,-1342,-1584,-859,-2012,-1242,-1211,-1,-2233,-1210,-1083,-1826,-282,-420,-417,-1340,-2220,-1825,-415,-416,-295,-2219,-1828,-2232,-1810,-982,-997,-53,-2239,-1346,-2015,-391,-1341,-294,-1698,-296,-427,-1820,-1394,-1811,-2019,-2020,-2029,-419,-425,-419,-862,-1821,-1589,-428,-1822,-273,-1192,-2016,-422,-2031,-272,-998,-408,-205,-1702,-1393,-1345,-400,-979,-108,-1204,-999,-393,-1812,-2276,-1086,-2075,-1896,-1397,-2137,-1814,-2021,-1352,-1525,-749,-1085,-1598,-1508,-1044,-413,-1588,-85,-1634,-864,-1813-1596,-2074,-1604,-796,-245,-1830,-1082,-1813,-1191,-1705,-1596,-2228,-204,-434,-1358,-882,-298,-863,-1518,-178,-97,-1823,-1701,-2227,-1046,-1250,-88,-297,-860,-60,-2030,-1782,-1897,-418,-55,-866,-2098,-445,-1535,-1348,-1347,-394,-1505,-756,-689,-861,-224,-2241,-2242,-409,-1764,-399,-1592,-407,-314,-2014,-724,-416,-276,-2110,-426,-1451,-2063,-1290,-1854,-1459,-1623,-448,-73,-1251,-1479,-81,-392,-881,-1817,-2024,-412,-1882,-2023,-446,-1045),]
+#confirm that train has 6 fewer records
+dim(train)
+```
+
+
+```{r perform-vif-1, eval=T}
+#refit multiple linear regression model on train
+l.model2 <- lm(data = train, target_wins ~ .)
+#display summary for Model 2: excluding high leverage points
+summary(l.model2)
+```
+
+Being that an in-depth analysis, as well as an explanation of how to interpret the coefficients as well as each statistic, was provided for model 1, here we'll highlight the changes in value from model 1 to model 2:
+
+* **RSE**: improvement from 12.56 to 9.998.
+* **F-statistic**: improvement from 101.1 to 148.5.
+* **Adj. $\mbox{R}^2$**: improvement from 0.3638 to 0.4765.
+
+For further insight, let's visit the diagnostic plots for model 2:
+
+```{r}
+#display Model 2 diagnostic plots
+plot(l.model2)
+```
+
+There's a noticeable improvement in curvature across our **residuals vs. fitted**, **scale-location**, and **normal Q-Q** plots. The curve in the red line on these plots is less pronounced, which is an indicator of model improvement. Additionally, when we look at our **residuals vs. leverage** plot, we note that Cook's distance lines (the red dashed lines) have receded toward the edges of our plot. This is also a positive indicator.
+
+Based on our summary statistics and residual plots, removing the aforementioned leverage points improved our model.
+
+### Model 3
+
+As a next step, we can deal with the non-pertinent variables we've carried thus far. These variables are distinguishable in model 1 and model 2 by their high p-values.
+
+We'll remove the least significant feature (team_baserun_cs) to see the impact it has on improving our model: 
+
+```{r}
+#refit model excluding impertinent feature variables
+l.model3 <- lm(data = train, target_wins ~ team_batting_h + team_batting_2b + team_batting_3b + team_batting_bb + team_batting_so + team_baserun_sb +team_pitching_so + team_pitching_h + team_pitching_hr + team_pitching_bb + team_fielding_e + team_fielding_dp)
+#display summary for Model 3: excluding impertinent features
+summary(l.model3)
+```
+The changes in value from model 2 to model 3 are noted below:
+
+* **p-values**: there's now only one variable above the 0.05 threshold. *Removing it had worsened our performance, so we kept it.*
+* **RSE**: improvement from 9.998 to 9.997.
+* **F-statistic**: improvement from 148.5 to 160.8
+* **Adj. $\mbox{R}^2$**: no change
+
+Let's visit the diagnostic plots for model 3 to see if there are any noteworthy changes:
+
+```{r}
+#display Model 3 diagnostic plots
+plot(l.model3)
+```
+
+From model 2 to model 3 there's no noticeable change in our residual plots. A net neutral.
+
+With no real change in residual plots and positive indicators in our summary statistics, it appears that removing the aforementioned features from consideration improved our model.
+
+
+### Model Selection
+
+Being that our model building process was one of continually fine-tuning the entry model, with model 2 being better than model 1 and model 3 being better than model 2, our choice in model is rather clear up to this point: **model 3**. Model 3 was our best performing model.
+
+<br><br>
+
+## 4. MODEL TESTING
+
+Being that explanations of selection have been documented up to this point, we'll assess model 3's performance and predictive capabilities.
+
+We'll first assess its performance on unseen data and compare this performance to that with seen data, we'll then explore which features carry the most influence in predicting team wins, and finally, we'll cast our predictions based on the evaluation dataset.
+
+### Model Assessment on Unseen Data
+
+We perform a train-test split on the training data, with an 80/20 proportion, apply regression to this unseen data, and then verify the RMSE and $\mbox{R}^2$ metrics to verify their consistency with values seen earlier:
+
+```{r}
+#use tidymodel framework to preprocess the regression model
+reg_recipe <- 
+    recipe(target_wins ~ ., data = train)
+
+set.seed(123)
+
+train_split <- initial_split(train, prop = 0.80)
+
+reg_train <- training(train_split)
+
+lm_model <- linear_reg() %>%
+    set_engine('lm') %>%
+    set_mode("regression")
+
+reg_workflow <- workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(reg_recipe)
+
+reg_fit <- reg_workflow %>% 
+  last_fit(split = train_split)
+
+reg_fit %>% collect_metrics()
+```
+
+If you recall the performance metrics for seen data, these values are consistent. The model's $\mbox{R}^2$ was actually slightly better for unseen data, which is curious.
+
+Next, we utilize the vip() function on model 3 to gain insight into the weight each feature carries in predicting whether or not a team will win:
+
+```{r}
+#vip() illustrate the relative importance of feature variables to Model 3
+vip(l.model3)
+```
+
+It appears that fielding errors, walks by batters, and hits allowed are most indicative of a team's ability to win a game. These results are somewhat suprising, especially fielding errors. 
+
+### Predictions 
+
+As a final step, we input the provided test data to our model and cast predictions:
+
+```{r model-predictions}
+#use the predict function to return predicted values on test data set
+l.predict <-  round(predict(l.model3, newdata = test), 0)
+#cast result as a dataframe with corresponding index
+lm_predicted <- as.data.frame(cbind(test$index, l.predict))
+#label with appropriate names
+colnames(lm_predicted) <- c('index','target_wins')
+#display the model prediction result for the test data
+lm_predicted
+```
+
+Our model's predictions are noted above, with the provided team's index in one column and our model's predicted number of wins in the second column.
+
+<br><br>
+
+## CONCLUSIONS
+
+### Summary
+&nbsp;&nbsp;&nbsp;&nbsp;We have presented here an incremental approach to arrive at a multiple linear regression model of annual team wins using the provided feature variables. Our initial data exploration and preparation excluded two feature variables:  
+
+* Batter hit by pitch (`team_batting_hbp`) was excluded due to the majority (>90%) of the feature records having missing values.
+* Homeruns by batter (`team_batting_hr`) was excluded due to multicolinearity (high VIF score)
+
+After iteratively accounting for leverage points (Model 2) and feature impertinence (Model 3), one more feature variable was removed from model consideration:  
+
+* Caught stealing (`team_baserun_cs`)
+
+As a result of this process, we arrive at a streamlined model that utilizes contributing feature variables to predict team wins. Furthermore, we have tested our model on novel data. For complete `R` code detailing our methods, please refer to the Appendix: `R` Statistical Code section.
+
+### Future Directions
+&nbsp;&nbsp;&nbsp;&nbsp;A weakness of our model is it's construction using a relatively limited set of explanatory feature variables. Future endeavors to more accurately predict team wins would be aided by the addition of key variables used in other analyses. For instance, the 'Pythagorean formula for Baseball' introduced by renowned sabermetrician Bill James, predicts a teams winning percentage:
+$$\mbox{Win%} = \frac{RS^2}{(RS^2 + RA^2)}$$
+where $RS$ = the runs scored by a team and $RA$ = the runs allowed for a team.  
+
+The equation was adapted as a simple ['Linear Formula for Baseball'](https://sabr.org/journal/article/a-new-formula-to-predict-a-teams-winning-percentage/) by Stanley Rothman using the following form:
+$$\mbox{Win%} = m\cdot(RS-RA) + b$$
+where $m$ and $b$ are the coefficients of a linear regression.  
+
+&nbsp;&nbsp;&nbsp;&nbsp;Unfortunately, our data set does not include features that directly describe a given team's Runs Scored or Runs Allowed (`RS`, `RA` respectively). Furthermore, Rothman notes in his analysis that records that predate 1998 need to be separated from the analysis owing to the fact that it is only after 1998 that the league structure changed to a 30 team system with 162 annual games. In this analysis, we do not have access to the record dates and assume a 162 annual game structure when this is factually incorrect. In conclusion, our model's success could be vastly improved with the incorporation of additional information such as, but not limited to the record date, Runs Scored and Runs Allowed.
+
+<br><br>
+
+## Appendix: `R` Statistical Code
+
+### DEPENDANCIES
+```{r eval = FALSE, echo=T}
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+library(car)
+library(VIM)
+library(corrplot)
+library(mice)
+library(leaps)
+library(tidyverse)
+library(tidymodels)
+library(vip)
+```
+
+### IMPORTING DATA
+```{r eval = FALSE, echo=T}
+test <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw1/moneyball-evaluation-data.csv')
+train <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw1/moneyball-training-data.csv')
+```
+
+### DATA EXPLORATION
+
+```{r eval = FALSE, echo=T}
+#overview of data set 
+glimpse( train )
+
+# remove row index field
+train <- dplyr::select(train, -INDEX)
+
+# work with lowercase field names
+names(train) <- lapply(names(train), tolower)
+names(test) <- lapply(names(test), tolower)
+
+#a sample view of the training data after the clean up:
+head(train)
+
+#visualize feature distributions
+ggplot(gather(train, variable, value), aes(x=value)) + stat_density() +
+  facet_wrap(~variable, scales = "free")
+  
+# scatter plot all explanatory variables against response
+tall <- gather(train, metric, value, -target_wins)
+
+ggplot(tall, aes(x = value, y = target_wins)) +
+  geom_point(alpha = .2) +
+  geom_smooth(method = 'lm', se = FALSE) +
+  facet_wrap(~metric, scales = 'free')  
+```
+
+### DATA PREPARATION
+```{r eval = FALSE, echo=T}
+#handling NA values
+#summarize missing data totals by feature
+colSums(is.na(train))
+
+#visualize missing data by feature as well as patterns of missing data across features
+mice_plot <- VIM::aggr(train, col=c('green','red'),
+                    numbers=TRUE, sortVars=TRUE, only.miss = TRUE,
+                     cex.axis=.55,
+                    gap=3, ylab=c("Missing Data","Pattern"))
+                    
+#feature exclusions
+#exclude team_batting_hbp from test & train
+train <- dplyr::select(train, -c(team_batting_hbp))
+test <-  dplyr::select(test, -c(team_batting_hbp)) 
+
+#multiple lm w/all feature variables
+l.model <- lm(data = train, target_wins ~ .)
+summary(l.model)
+
+#Imputation
+#apply predictive mean matching to train
+train <- mice(data = train, m = 1, method = "pmm", seed = 500)
+train <- mice::complete(train, 1)
+#apply predictive mean matching to test
+test <- mice(data = test, m = 1,  method = "pmm", seed = 500)
+test <- mice::complete(test, 1) 
+
+#verify absence of NA values in the dataset
+colSums(is.na(train))
+
+#Multicollinearity
+#display VIF values for each feature variables
+l.model <- lm(data = train, target_wins ~ .)
+car::vif(l.model)
+
+#remove the feature 'team_batting_hr' from train & test
+train <- dplyr::select(train, -c(team_batting_hr))
+test <-  dplyr::select(test, -c(team_batting_hr))
+
+#display VIF values for feature variables
+l.model <- lm(data = train, target_wins ~ .)
+car::vif(l.model) 
+```
+
+### MODEL BUILDING & SELECTION
+```{r eval = FALSE, echo=T}
+#display summary for Model 1: all inclusive (kitchen sink) model
+summary(l.model)
+
+#display Model 1 diagnostic plots
+layout(matrix(c(1,2,3,4),2,2))
+plot(l.model)
+
+#remove leverage points from train data set
+train <- train[c(-2136,-1342,-1584,-859,-2012,-1242,-1211,-1,-2233,-1210,-1083,-1826,-282,-420,-417,-1340,-2220,-1825,-415,-416,-295,-2219,-1828,-2232,-1810,-982,-997,-53,-2239,-1346,-2015,-391,-1341,-294,-1698,-296,-427,-1820,-1394,-1811,-2019,-2020,-2029,-419,-425,-419,-862,-1821,-1589,-428,-1822,-273,-1192,-2016,-422,-2031,-272,-998,-408,-205,-1702,-1393,-1345,-400,-979,-108,-1204,-999,-393,-1812,-2276,-1086,-2075,-1896,-1397,-2137,-1814,-2021,-1352,-1525,-749,-1085,-1598,-1508,-1044,-413,-1588,-85,-1634,-864,-1813-1596,-2074,-1604,-796,-245,-1830,-1082,-1813,-1191,-1705,-1596,-2228,-204,-434,-1358,-882,-298,-863,-1518,-178,-97,-1823,-1701,-2227,-1046,-1250,-88,-297,-860,-60,-2030,-1782,-1897,-418,-55,-866,-2098,-445,-1535,-1348,-1347,-394,-1505,-756,-689,-861,-224,-2241,-2242,-409,-1764,-399,-1592,-407,-314,-2014,-724,-416,-276,-2110,-426,-1451,-2063,-1290,-1854,-1459,-1623,-448,-73,-1251,-1479,-81,-392,-881,-1817,-2024,-412,-1882,-2023,-446,-1045),]
+#confirm that train has 6 fewer records
+dim(train)
+
+#refit multiple linear regression model on train
+l.model2 <- lm(data = train, target_wins ~ .)
+#display summary for Model 2: excluding high leverage points
+summary(l.model2)
+
+#display Model 2 diagnostic plots
+plot(l.model2)
+
+#refit model excluding impertinent feature variables
+l.model3 <- lm(data = train, target_wins ~ team_batting_h + team_batting_2b + team_batting_3b + team_batting_bb + team_batting_so + team_baserun_sb + team_pitching_h + team_pitching_hr + team_pitching_bb + team_fielding_e + team_fielding_dp)
+#display summary for Model 3: excluding impertinent features
+summary(l.model3)
+
+#display Model 3 diagnostic plots
+plot(l.model3)
+```
+
+### Model Testing
+```{r eval = FALSE, echo=T}
+#use tidymodel framework to preprocess the regression model
+reg_recipe <- 
+    recipe(target_wins ~ ., data = train)
+
+set.seed(123)
+
+train_split <- initial_split(train, prop = 0.80)
+
+reg_train <- training(train_split)
+
+lm_model <- linear_reg() %>%
+    set_engine('lm') %>%
+    set_mode("regression")
+
+reg_workflow <- workflow() %>% 
+  add_model(lm_model) %>% 
+  add_recipe(reg_recipe)
+
+reg_fit <- reg_workflow %>% 
+  last_fit(split = train_split)
+
+reg_fit %>% collect_metrics()
+
+#vip() illustrate the relative importance of feature variables to Model 3
+vip(l.model3)
+
+#use the predict function to return predicted values on test data set
+l.predict <-  round(predict(l.model3, newdata = test), 0)
+#cast result as a dataframe with corresponding index
+lm_predicted <- as.data.frame(cbind(test$index, l.predict))
+#label with appropriate names
+colnames(lm_predicted) <- c('index','target_wins')
+#display the model prediction result for the test data
+lm_predicted
+```
+
+
+<br><br><br>
