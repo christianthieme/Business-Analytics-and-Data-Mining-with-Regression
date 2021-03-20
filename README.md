@@ -4,3 +4,5 @@
 
 #### [Moneyball Multiple Regression Analysis](https://rpubs.com/christianthieme/735227)
 
+#### [Classification Metrics](https://rpubs.com/christianthieme/742363)
+
