@@ -1,0 +1,80 @@
+---
+title: "The Most Common Classification Algorithm Metrics and When to Use Them"
+author: "Christian Thieme"
+date: "3/31/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(imputeTS)
+train <- readr::read_csv('C:/Users/chris/OneDrive/Master Of Data Science - CUNY/Winter 2021/DATA621/Business-Analytics-and-Data-Mining-with-Regression/Titanic Kaggle Blog Dataset/train.csv')
+test <- readr::read_csv('C:/Users/chris/OneDrive/Master Of Data Science - CUNY/Winter 2021/DATA621/Business-Analytics-and-Data-Mining-with-Regression/Titanic Kaggle Blog Dataset/test.csv')
+
+train <- train %>% select(Pclass, Sex, Age, SibSp, Parch, Fare, Survived)
+test <- test %>% select(Pclass, Sex, Age, SibSp, Parch, Fare)
+
+#train$Survived <- ifelse(train$Survived == 0, "Dead", "Alive")
+```
+
+## Introduction
+
+After successfully generating predictions from your classification model, you'll want to know how accurate the predictions are. Accuracy can be a pretty squirrelly concept when it comes to classification models because the metrics that are meaningful to your model will vary based on the purpose of your model. For example, are you trying to predict if a patient has cancer? Or are you trying to predict if a person is male or female? In evaluating both of these models, you would focus your attention on different metrics because there are different costs for making an incorrect prediction.
+
+To understand these intricacies, let's use these metrics to evaluate a classification model. The data we'll be using comes from Kaggle's well known [*Titanic - Machine Learning from Disaster*](https://www.kaggle.com/c/titanic/data) classification competition. Each row of the dataset describes one of the passengers aboard the Titanic. The purpose of the competition is to use the provided features (such as gender, age, etc.) to predict whether the passenger lived or died. The Kaggle competition provides both a training and a test dataset.
+
+![](titanic.jpg)
+
+## Evaluation Metrics
+
+Without doing any data cleaning or feature engineering, we'll generate a baseline logistic regression model by fitting our model on the training data and then make prediction on the test dataset. For simplicity, we'll use the features without any missing values. We will use the following metrics to evaluate the accuracy of the model on the test dataset:
+
+-   Accuracy
+
+-   Classification Error Rate
+
+-   Precision
+
+-   Sensitivity
+
+-   Specificity
+
+-   F1 Score
+
+-   Receiver Operating Characteristic (ROC) Curve
+
+-   AUC
+
+## The Model
+
+```{r echo = FALSE}
+train <- imputeTS::na_locf(train)
+test <- imputeTS::na_locf(test)
+```
+
+We'll fit a logistic regression model to our data using the `Pclass`, `Sex`, `Age`, `SibSp`, `Parch`, and `Fare` columns from the dataset to try and predict `Survived`.
+
+```{r}
+
+log_fit <- glm(Survived ~ ., family = binomial(link = 'logit'), data = train,)
+
+summary(log_fit)
+
+```
+
+Having fit our model, let's now generate our predictions on the test dataset.
+
+```{r}
+#test <- test %>% select(Pclass, Sex, Age, SibSp, Parch, Fare)
+
+log_preds <- predict(log_fit, newdata = test, type = 'response')
+
+#logistic_predictions <- ifelse(logistic_predictions > 0.5, 0,1)
+log_preds
+
+```
+
+```{r}
+length(log_preds)
+```
