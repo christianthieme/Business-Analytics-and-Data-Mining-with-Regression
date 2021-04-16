@@ -1,0 +1,1064 @@
+---
+title: 'HW3: Logistic Regression - Identifying High Risk Neighborhoods'
+author: "Critical Thinking Group One"
+date: "`r Sys.Date()`" # Due 4/18/2021
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: no
+    theme: cerulean
+    highlight: tango
+    font-family: Arial
+  pdf_document:
+    latex_engine: xelatex
+    toc: yes
+---
+
+```{=html}
+<style type="text/css">
+
+code {
+  font-family: "Consolas";
+  font-size: 11px;
+}
+
+pre {
+  font-family: "Consolas";
+  font-size: 11px;
+}
+
+</style>
+```
+
+## Authorship
+
+**Critical Thinking Group 1**
+
+-   Angel Claudio
+-   Bonnie Cooper
+-   Manolis Manoli
+-   Magnus Skonberg
+-   Christian Thieme
+-   Leo Yi
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = F, warning = F, message = F, eval = T) 
+knitr::opts_chunk$set(fig.width=12, fig.height=8)
+library(knitr)
+library(skimr)
+library(visdat)
+library(inspectdf)
+library(corrplot)
+library(scales)
+library(tidyverse)
+library(tidyr)
+library(car)
+library(dplyr)
+library(kableExtra)
+library(tufte)
+library(MASS) #stepAIC
+library(rsample)
+library(BBmisc)
+library(tidymodels)
+
+
+options(scipen = 9)
+set.seed(123)
+```
+
+```{r}
+train <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw3/crime-training-data_modified.csv')
+test <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw3/crime-evaluation-data_modified.csv')
+
+#add target column to test set
+test$target <- NA
+```
+
+<br><br>
+
+## Background
+
+In the following exercises we will be working with **The Boston Housing Dataset**. The dataset was gathered by the US Census Bureau regarding housing in the Boston Massachussetts area and can be obtained from the [StatLib archive](http://lib.stat.cmu.edu/datasets/boston).
+
+This dataset has been used extensively in academic literature and for Kaggle competitions because it can be used as a benchmark for different algorithms. The dataset is relatively small (506 observations) and contains the following variables:
+
+* `zn`       proportion of residential land zoned for lots over 25,000 sq.ft.
+* `indus`    proportion of non-retail business acres per town
+* `chas`     Charles River dummy variable (= 1 if tract bounds river; 0 otherwise)
+* `nox`      nitric oxides concentration (parts per 10 million)
+* `rm`       average number of rooms per dwelling
+* `age`      proportion of owner-occupied units built prior to 1940
+* `dis`      weighted distances to five Boston employment centres
+* `rad`      index of accessibility to radial highways
+* `tax`      full-value property-tax rate per $10,000
+* `ptratio`  pupil-teacher ratio by town
+* `lstat`    % lower status of the population
+* `medv`     median value of owner-occupied homes in $1000's
+* `target`   **response variable** indicating whether or not the crime rate is above the median crime rate (1) or not (0)
+
+The purpose of the assignment is to build logistic regression models on the boston housing training data to predict whether or not neighborhoods are at risk for high crime, and validate the model with the greatest predictive accuracy.
+
+### Our Approach
+
+The goal of our modeling approach is to find the optimal binary logistic regression model that utilizes this feature set to predict whether or not a neighborhood has a high crime rate.
+
+Along the way, we will explore numerous logistic regression models:
+
+1. **baseline model**: no data preparation --> "baseline" predictive accuracy
+2. **outlier optimized model**: observe the affect that dealing with outliers (alone) has on our predictive accuracy
+3. **outlier and feature engineered model**: observe the affect that dealing with outliers *and* engineering features has on our predictive accuracy
+4. **AIC optimized model**: apply stepAIC() function to outlier and feature engineered model to *automatically* identify (and then remove) impertinent features.
+
+We start by importing the data, performing a *thorough* exploratory data analysis, and preparing our data with a series of transformational steps (ie. dealing with outliers, feature engineering and removal). We then move on to building each model, exploring corresponding predictive accuracies, verifying each model's predictive capability with our test data, and then highlighting the strongest model from those listed above.
+
+................................................................................
+
+
+## Data Exploration & Baseline Model
+
+> “Far better an approximate answer to the right question, which is often vague, than an exact answer to the wrong question, which can always be made precise.” - John Tukey
+
+The goal of exploratory data analysis (or EDA for short) is to enhance the precision of the questions we're asking. To generate questions, we search for answers via visualization, transformation, and modeling. Then, we use what we learn to refine our questions or generate new questions. It's an iterative process where the end goal is to *really* grasp and understand the data at hand.
+
+For our approach, we first get to know the structure and value ranges, we then look at the distributions of our features, visualize the relationship between our numeric variables and the `target` variable, visualize the relationship our numeric variables have with one another, and then build our "baseline" logistic regression model with the aim of verifying multicollinearity via **vif()** function. After this point, we should have enough insight to prepare our data and then build our model.
+
+To start, we utilize the built-in `glimpse()` method to gain insight into the dimensions, variable characteristics, and value range for our training dataset:
+
+```{r}
+glimpse(train)
+```
+
+From above, we see that our training dataset has **13** variables (of type double) and **466** observations, all positive numeric values with varying ranges (shown across each row), and two features (`chas` and `target`) that should be factors.
+
+We update these features accordingly, combine datasets (to reduce duplication of work in data cleaning and feature engineering), and utilize **skimr()** and **inspectdf()** functions to take a more detailed look at the visualization of categorical vs. numeric predictor variables:
+
+```{r, fig.cap="Most common level of categorical features. The balance of values for binary feature variables: `chaz` (red) : ~93% value=0 whereas `target` is evenly balanced with ~51% value = 0"}
+#convert features to factor
+train$chas <- as.factor(train$chas)
+test$chas <- as.factor(test$chas)
+
+train$target <- as.factor(train$target)
+test$target <- as.factor(test$target)
+
+#add dataset feature
+train$dataset <- 'train'
+test$dataset <- 'test'
+
+#setup visualization dataset and combine datasets
+data <- train %>% dplyr::select(-dataset)
+final_df <- rbind(train, test)
+
+#plot font size
+plotfontsize <- 16
+
+#revisit thorough summary statistics
+#skimr::skim(train) #output to HTML not PDF
+fig1 <- inspectdf::inspect_imb(data)
+fig1 <- ggplot( data = fig1, aes( x = as.factor( col_name ), y = pcnt, fill = col_name ) ) +
+    geom_bar( stat = "identity") +
+    geom_text( aes( label = paste( round( pcnt,2 ), '%, value =', value ) ), size = 6 ) +
+    theme( text = element_text(size=plotfontsize)) +
+    ggtitle( 'Categorical Predictor Variables', subtitle = 'balance of binary values' ) +
+    ylab( "% most common value") +
+    xlab( "Variable")
+fig1
+```
+
+From our earlier `glimpse` output and the visualization features (`chas` and `target`) we observe that:
+
+* there are no nulls in our dataset,
+* `target` is split almost fifty-fifty (a balanced set), and
+* more than 90 percent of `chas` values are 0, which means most of neighborhoods are not near Charles River.
+
+With regard to numeric predictor variables:
+
+```{r, fig.show='hide'}
+fig2 <- inspectdf::inspect_num(data) %>% 
+  show_plot()
+```
+
+```{r, fig.cap="Distributions of numeric feature variables"}
+fig2 + theme(text = element_text(size=plotfontsize))
+```
+
+
+We observe that:
+
+* `age` is highly left skewed, meaning a lot of homes in our dataset were built prior to 1940.
+* `dis` is highly right skewed, meaning many of the homes are in close proximity to Boston employment centers. We might venture to say that being close to one, indicates that there is more need for one. 
+* `indus` appears to overall have a fairly low proportion of non-retail business acres, although we see a spike ~18%. 
+* `lstat` is right skewed, reaching its peak between 5-20%.
+* `medv` is slightly right skewed, reaching its peak between $17-25K. 
+* `nox` - is a multi-modal distribution, concentrated between 0.4-0.6, with its last significant spike ~0.7.
+* `ptratio` - is a relatively uniform distribution ranging from 12.5-22.5 with a significant spike ~21.
+* `rad` - is a bimodal distribution with peaks ~5 and ~22.5. It appears that individuals are either very close OR very far from radial highways.
+* `rm` - is a relatively normal distribution with a peak ~6 and the greatest concentration of rooms between 5.5-7.
+* `tax`- is a bimodal distribution with one peak ~300 and a larger peak ~650. There looks to be a split where either the tax value is on the lower end, or very high (600K+).
+* `zn` - is highly right skewed and may be adjusted as a categorical variable (0,1). It looks like the majority of land is not zoned for large lots.
+
+With an initial understanding of our data, we visualize the relationship between our numeric variables and `target` variable via boxplots:
+
+```{r fig.height=11, fig.width=12, fig.cap="Relationship of numeric feature variables to the 'target' variable"}
+train_int_names <- train %>% select_if(is.numeric)
+int_names <- names(train_int_names)
+
+for (i in int_names) {
+  assign(paste0("var_",i), ggplot(train, aes_string(x = train$target, y = i)) + 
+          geom_boxplot(color = 'steelblue', outlier.color = 'firebrick', outlier.alpha = 0.35) +
+          #scale_y_continuous(labels = comma) +
+          labs(title = paste0(i,' vs target'), y = i, x= 'target') +
+          theme_minimal() + 
+          theme(
+            plot.title = element_text(hjust = 0.45),
+            panel.grid.major.y =  element_line(color = "grey", linetype = "dashed"),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor.y = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            axis.ticks.x = element_line(color = "grey"),
+            text = element_text(size=plotfontsize)
+          ))
+}
+
+
+
+gridExtra::grid.arrange(var_age, var_dis, var_indus,var_lstat,var_medv,var_nox,var_ptratio,var_rad, var_rm, var_tax, var_zn, nrow=4)
+
+```
+
+There are outliers in 9/11 features. Being that generalized regression is sensitive to outliers, we'll need to pay attention to the effect these outliers (and our dealing with them) have on the predictive accuracy of our model. We saw what appeared to be some outliers in our earlier histograms and so we'll focus our analysis on looking at the median values of each feature:
+
+* `age` appears to be highly correlated with target. The higher the proportion of homes that are built prior to 1940, the higher risk for crime. This makes sense as generally older homes and neighborhoods tend to be less expensive 
+* `dis` appears to be highly correlated. The closer to employment centers, the higher the risk of crime. 
+* `indus` appears to be correlated. Neighborhoods where there is a higher proportion of non-retail business acres are associated with higher crime
+* `lstat` - appears to be somewhat correlated. The higher the proportion of 'lower status' the more crime.   
+* `medv` - appears to be somewhat correlated. The higher the median value of a home, the lower the rate of crime.
+* `nox` - appears to be highly correlated. The more pollution, the higher the risk of crime. 
+* `ptratio` - appears to be correlated. Where there are more students per teacher, there's a higher risk of crime. 
+* `rad` - has an on relationship / correlation. The values that have a higher index make up a big chunk of the population and make our boxplot for 1-higher crime look a little strange. This may need to be broken into a separate feature.
+* `rm` - does not appear to be correlated, and we'll verify via correlation matrix later.
+* `tax`- has a similar correlation relationship to `rad` and may need to be broken into a separate feature as well.
+* `zn` - appears to be weakly correlated. A large proportion of the values are 0. This feature does not appear to provide much signal and may be deemed a "throwaway".
+
+Having reviewed the relationship each of our numeric features has with the `target` variable, we'll turn our attention to exploring the relationship these variables have with one another via **pairs** plot and **correlation matrix**:
+
+```{r fig.height=10, fig.width=10, fig.cap = "Paired plots of Feature Variables. clear relationships between pairs of feature variables are observed"}
+pairs(train %>% select_if(is.numeric))
+```
+
+From the pairs plot (Figure 4) we observe that:
+
+* `age`, `indus`, `ptratio`, `rad`, `tax`, and `zn` all have odd distributions,
+* many features appear to be highly correlated with one another, with some distributions even taking on an exponential curve, and
+* it appears there are more features that are related than not.
+
+To confirm or deny this fact, we explore the corresponding correlation matrix:
+
+```{r fig.height = 7, fig.width = 7, warning=FALSE, fig.cap="Correlation Matrix of feature variables. Multicolinearity between variables are observed"}
+numeric_values <- train %>% select_if(is.numeric)
+
+train_cor <- cor(numeric_values)
+
+corrplot.mixed(train_cor, tl.col = 'black', tl.pos = 'lt')
+
+```
+
+**Our correlation matrix confirms that multicollinearity is a concern.** 
+
+### Model 1: Baseline
+
+We dig deeper into this issue by running a "baseline" logistic regression model - one without data preparation, feature removal or engineering - and then applying variance inflation factor (VIF) analysis:
+
+```{r}
+#prepare input data
+train2 <- train %>% dplyr::select(-`dataset`)
+
+#fit "baseline" model
+log_model <- glm(target ~ ., family = binomial(link = "logit"), data = train2)
+
+#review summary statistics
+summary(log_model)
+```
+
+From the above output statistics we observe that our baseline model AIC value is 218.05 and we may indeed be carrying impertinent features (ie. `indus`, `chas`, `rm`, and `lstat`).
+
+Next we verify the statistical significance of our "baseline" model:
+
+```{r}
+#calculate deviance and p-value vs. null
+with(log_model, null.deviance - deviance)
+with(log_model, pchisq(null.deviance - deviance, df.null - df.residual, lower.tail = FALSE))
+```
+
+Based on the relatively high null deviance (the 1st output) and extraordinarily low p-value (the 2nd output), our model is a better fit than the null-model.
+
+We proceed to the corresponding confusion matrix:
+
+```{r}
+#prepare confusion matrix
+log_preds <- predict(log_model, type = 'response')
+train2$preds <- ifelse(log_preds > 0.5, 1,0)
+train2$target <- factor(train2$target, levels = c(1,0), labels = c('Risk', 'Normal'))
+train2$preds <- factor(train2$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+caret::confusionMatrix(data = train2$preds, reference = train2$target)
+```
+
+We observe a relatively high "baseline". Our model, with no data cleansing or feature engineering, predicts with an accuracy of ~92%.
+
+To verify multicollinearity, we make use of the **vif()** function from the car library:
+
+```{r}
+#verify vif
+car::vif(log_model)
+```
+
+Surprisingly, not one of our VIF values surpass the >= 10 threshold for high correlation. 
+
+With multicollinearity in check, we proceed to data preparation with all features.
+
+................................................................................
+
+
+## Data Preparation & Model Building
+
+With insights gained via EDA, we can now identify and handle outliers, engineer features that may improve our model, and drop impertinent features from consideration based on accuracy and AIC value.
+
+### Handle Outliers
+
+Multicollinearity and outliers can have a strong negative influence on general regression models. Being that multicollinearity was addressed at the end of EDA, we're going to deal with the outliers in our set here (before engineering and removing features).
+
+Consulting diagnostic plots confirmed the presence of outliers (i.e. observations 338, 62, 457, 14). With the understanding, that these points could heavily skew our model, we determined it best to identify and remove outliers.
+
+To do so, we calculate the cooks distance for all observations, filter these observations for the most extreme values (), and then remove the identified observations from consideration:
+
+```{r}
+#diagnostic plots
+#plot(log_model)
+
+#use cooks distance to identify
+cooks_distance <- cooks.distance(log_model)
+influential <- as.numeric(names(cooks_distance)[(cooks_distance > 4 * mean(cooks_distance, na.rm = TRUE))]) 
+
+influential
+#train[influential,] #verify outliers
+
+#remove outliers
+train3 <- train[-influential, ]
+#train3
+```
+
+Using $4 * mean(cooksDistance)$, 26 observations (noted above) were removed from consideration. Resulting in a revised training dataset with 466 (original observations) - 26 (outliers) = 440 observations.
+
+### Model 2: Outlier Optimized
+
+Let's observe the impact of outlier removal on model performance:
+
+```{r}
+#prepare input data
+train3 <- train3 %>% dplyr::select(-dataset)
+
+#fit model
+log_model2 <- glm(target ~ ., family = binomial(link = "logit"), data = train3) 
+
+#output summary statistics
+summary(log_model2) 
+```
+
+While the high p-values of certain features (i.e. `chas1`, `rm`, and `lstat`) is indicative that we may be carrying impertinent features, **our AIC score dropped from 218.05 to 97.15**.
+
+The Akaike Information Criterion (AIC score) deals with the model's goodness of fit and simplicity (i.e. feature pertinence). It estimates the relative amount of information lost by a given model, accounts for over vs. under fitting, and is typically used as a means of model selection.
+
+The lower the score, the better the perceived prediction error rate. As noted earlier, we're going to use the AIC score in conjunction with model accuracy to determine model optimization (and later model selection).
+
+As for the impact of outlier removal on model accuracy:
+
+```{r}
+#prepare confusion matrix
+log_preds2 <- predict(log_model2, type = 'response') #assign predicted probabilities
+train3$preds <- ifelse(log_preds2 > 0.5, 1,0) #assign predictions based on probabilities with 0.5 threshold
+
+train3$target <- factor(train3$target, levels = c(1,0), labels = c('Risk', 'Normal')) #relabel target column
+train3$preds <- factor(train3$preds, levels = c(1,0), labels = c('Risk', 'Normal')) #relabel predictions column
+
+caret::confusionMatrix(data = train3$preds, reference = train3$target) #output confusion matrix
+```
+
+From the above output, we see that **our accuracy improved from less than 92% to greater than 97%**.
+
+Removing outliers was a major step in optimizing our model's accuracy and AIC score. 
+
+### Engineer Features
+
+To deal with the odd distribution shapes observed earlier (i.e. `tax` and `rad`), we work to identify feature adaptations that may improve our model's accuracy.
+
+To engineer features we remove outliers from the training set, combine our training and testing sets so that we don't have to make features twice, and then create new features based on patterns identified during EDA:
+
+```{r}
+#removing outliers from training set
+train <- train[-influential, ] 
+
+#combining datasets so we don't have to make features twice
+final_df <- rbind(train, test)
+
+#Creating new features:
+final_df$rm <- round(final_df$rm,0) #adaptation of original feature --> round 0.5 up
+final_df$age_greater_than_85 <- as.factor(ifelse(final_df$age >= 85, 1, 0))
+final_df$distance_band <- as.factor(ifelse(final_df$dis < 4, 1, 0))
+final_df$indus_flag <- as.factor(ifelse(final_df$indus > 15, 1, 0))
+final_df$lstat_and_rad <- as.factor(ifelse(final_df$lstat > 20 & final_df$rad > 4, 1, 0))
+final_df$lstat_flag <- as.factor(ifelse(final_df$lstat > 12, 1, 0))
+final_df$medv_and_tax <- as.factor(ifelse(final_df$medv < 17 & final_df$tax > 350, 1, 0))
+final_df$high_nox <- as.factor(ifelse(final_df$nox > .6, 1, 0))
+final_df$ptratio_and_lstat <- as.factor(ifelse(final_df$ptratio > 20 & final_df$lstat > 15,1,0))
+
+#transformation of independent variables had no effect on accuracy or AIC score
+
+```
+
+We can confirm our observation number via simple arithmetic: 466 (training) - 26 (outliers) + 40 (testing) = 480 observations. And thus, `final_df` is a 480 observation x 22 feature (1 `target`) dataframe. 
+
+We engineered eight features in total (5 flag features and 3 combination features):
+
+* `age_greater_than_85` receives a value of 1 if >= 85 years, 0 otherwise
+* `distance_band` receives a value of 1 if < 4 miles from employment centers, 0 otherwise
+* `indus_flag` receives a value of 1 if > 15 proportion of non-retail business acres per town, 0 otherwise
+* `lstat_and_rad` receives a value of 1 if > 20 % of population are lower status *and* accessibility to radial highways is > 4, 0 otherwise
+* `lstat_flag` receives a value of 1 if > 12 % of population are lower status, 0 otherwise
+* `medv_and_tax` receives a value of 1 if median value of owner-occupied homes in `$`1000's is < 17 *and* full-value property-tax rate per `$`10,000 is > 350, 0 otherwise
+* `high_nox` receives a value of 1 if nitric oxides concentration (parts per 10 million) is > .6, 0 otherwise
+* `ptratio_and_lstat` receives a value of 1 if the parent-teacher ratio is > 20 *and* > 15% of population are lower status, 0 otherwise
+
+While it may seem a bit excessive to have engineered this many features, we found that their combination improved our accuracy. Additionally, we know we can drop impertinent features later during feature removal (if deemed necessary).
+
+### Model 3: Feature Engineered
+
+As a next step, we filter for training data, drop the `dataset` feature, fit our model and visit the corresponding summary statistics and confusion matrix:
+
+```{r}
+#prepare input data: filter for training data and drop dataset feature from consideration
+train4 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+#fit model
+log_model3 <- glm(target ~ ., family = binomial(link = "logit"), data = train4)
+
+#output summary statistics
+summary(log_model3) 
+```
+
+While the high p-values of certain features (i.e. `indus`, `chas1` and `lstat`) are indicative that we may be carrying impertinent features, **our AIC score dropped from 97.15 to 91.605**.
+
+As for the impact of feature engineering on model accuracy:
+
+```{r}
+#prepare confusion matrix
+log_preds3 <- predict(log_model3, type = 'response') 
+train4$preds <- ifelse(log_preds3 > 0.5, 1,0) 
+
+train4$target <- factor(train4$target, levels = c(1,0), labels = c('Risk', 'Normal'))
+train4$preds <- factor(train4$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+
+caret::confusionMatrix(data = train4$preds, reference = train4$target)
+```
+
+From the above output, we see that **our accuracy improved from 97.05% to 98.41%**.
+
+Engineering features, although not as impactful as outlier removal, was another positive step in optimizing our model's accuracy and AIC score. 
+
+### Remove Features
+
+Before finalizing our model, we've got to put its features under the microscope. We've got to determine whether or not each feature adds real value to the model.
+
+In reviewing summary statistics up to this point there have been numerous features with high p-values. These high p-values can be indicative of impertinent features and thus our model may be optimized by their dropping.
+
+As a next step, we aim to maintain or optimize our model's accuracy and AIC score as we identify and drop impertinent features.
+
+For removing insignificant features, we utilize the **stepAIC()** function to identify an AIC-optimized model (without impertinent features):
+
+```{r}
+#apply stepAIC to optimize model
+aic_opt_model <- stepAIC(log_model3)
+```
+
+After seven iterations, **our AIC score dropped from 91.605 to 81.18** and our model was narrowed from 21 features to 14.
+
+### Model 4: AIC Optimized
+
+As a next step, we prepare our data, fit our *AIC optimized* model and visit the corresponding summary statistics and confusion matrix:
+
+```{r}
+#prepare input data
+train5 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+#fit AIC optimized model
+final_model <- glm(target ~ zn + nox + rm + age + dis + rad + tax + 
+    ptratio + medv + age_greater_than_85 + indus_flag + medv_and_tax + 
+    high_nox + ptratio_and_lstat,
+               family = binomial(link = "logit"), data = train5)
+
+#output summary statistics
+summary(final_model) 
+```
+
+We'd already touched on the fact that **our AIC score dropped from 91.605 to 81.18**, but it's also interesting to note that where our earlier model carried 12 features with high p-values, our AIC optimized model only carries 4 such features.
+
+As for the impact of feature removal on model accuracy:
+
+```{r}
+#prepare confusion matrix
+final_preds <- predict(final_model, type = 'response')
+train5$preds <- ifelse(final_preds > 0.5, 1,0)
+train5$target <- factor(train5$target, levels = c(1,0), labels = c('Risk', 'Normal'))
+train5$preds <- factor(train5$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+caret::confusionMatrix(data = train5$preds, reference = train5$target)
+
+```
+
+From the above output, we see that **our accuracy decreased from 98.41% to 97.95%**.
+
+This is a red flag, but it's also worth noting that we've been working primarily with seen data and have yet to assess model performance on unseen data.
+
+With this in mind we proceed to model selection with the two models that held the most predictive promise:
+
+* **Model 3**: the outlier and feature engineered model and 
+* **Model 4**: the AIC optimized model
+
+................................................................................
+
+
+## Model Selection
+
+We'll compare how each of these models perform on unseen data and determine whether **Model 3** or **Model 4** hold a greater potential to predict whether or not neighborhoods are at risk for high crime.
+
+### Outlier and Feature Engineered Model
+
+We prepare our data, perform a train-test split (on the training dataset), fit our *outlier and feature engineered* model and visit the corresponding summary statistics and confusion matrix:
+
+```{r}
+#set seed
+set.seed(123) #for reproducibility
+
+#prepare input data
+train6 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+#perform train-test split
+train_split <- initial_split(train6, prop = 0.80)
+final_train <- training(train_split)
+final_test <- testing(train_split)
+results <- final_test$target
+final_test$target <- NA
+
+#fit model
+final_log_model <- glm(target ~ ., family = binomial(link = "logit"), data = final_train)
+
+#output summary statistics
+#summary(final_log_model)
+
+#prepare confusion matrix
+final_log_preds <- predict(final_log_model, type = 'response', newdata = final_test)
+final_test$preds <- ifelse(final_log_preds > 0.5, 1,0)
+
+final_test$target <- factor(results, levels = c(1,0), labels = c('Risk', 'Normal'))
+final_test$preds <- factor(final_test$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+
+#output to kable table
+OF_Model <- caret::confusionMatrix(data = final_test$preds, reference = final_test$target)$byClass
+AccuracyOF <- caret::confusionMatrix(final_test$preds, final_test$target)$overall['Accuracy']
+OF_Model <- data.frame(OF_Model)
+OF_Model <- rbind("Accuracy" = AccuracyOF, OF_Model)
+
+#tabularview <- data.frame(OF_Model)
+
+#tabularview %>%  kableExtra::kbl() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),latex_options="striped")
+
+```
+
+For now, we'll just note that our *outlier and feature engineered* model had an accuracy of 91.95%. While quite good, this is a far cry from the 98.41% accuracy the model had produced on training data earlier on. After visiting the AIC model's confusion matrix, we'll interpret classification statistics for each model side-by-side.
+
+### AIC Optimized Model
+
+We prepare our data, perform a train-test split (on the training dataset), fit our *AIC optimized* model and visit the corresponding summary statistics and confusion matrix:
+
+```{r}
+#set seed
+set.seed(124) #for reproducibility
+
+#prepare input data
+train7 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+#perform train-test split
+train_split2 <- initial_split(train7, prop = 0.80)
+final_train2 <- training(train_split2)
+final_test2 <- testing(train_split2)
+results2 <- final_test2$target
+final_test2$target <- NA
+
+#fit model
+final_log_model2 <- glm(target ~ zn + nox + rm + age + dis + rad + tax + 
+    ptratio + medv + age_greater_than_85 + indus_flag + medv_and_tax + 
+    high_nox + ptratio_and_lstat, family = binomial(link = "logit"), data = final_train2)
+
+#output summary statistics
+#summary(final_log_model2)
+
+#prepare confusion matrix
+final_log_preds2 <- predict(final_log_model2, type = 'response', newdata = final_test2)
+final_test2$preds <- ifelse(final_log_preds2 > 0.5, 1,0)
+
+final_test2$target <- factor(results2, levels = c(1,0), labels = c('Risk', 'Normal'))
+final_test2$preds <- factor(final_test2$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+
+#output to kable table
+AIC_Model <- caret::confusionMatrix(data = final_test2$preds, reference = final_test2$target)$byClass
+AccuracyAIC <- caret::confusionMatrix(final_test2$preds, final_test2$target)$overall['Accuracy']
+AIC_Model <- data.frame(AIC_Model)
+AIC_Model <- rbind("Accuracy" = AccuracyAIC, AIC_Model)
+
+#tabularview <- data.frame(AIC_Model)
+
+#tabularview %>%  kableExtra::kbl() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),latex_options="striped")
+```
+
+
+For now, we'll just note that our *AIC optimized* model had an accuracy of 97.7%. While a little worse than the 97.95% accuracy the model had produced on training data earlier, this is a stronger performance than than the *outlier and feature engineered* model.
+
+### Side-by-Side Comparison
+
+We put our models side-by-side to interpret their common classification metrics and determine which has the greatest predictive accuracy:
+
+```{r}
+#accuracy and classification statistics as a kable table 
+tabularview <- data.frame(OF_Model, AIC_Model)
+
+tabularview %>%  kableExtra::kbl() %>% kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),latex_options="hold_position")
+
+```
+
+We consider the following classification metrics:
+
+* **Accuracy **: $\frac{TP+TN}{TP + FP + TN + FN}$
+* **Sensitivity (Recall) **: true positive rate. $\frac{TP}{TP + FN}$
+* **Specificity**: true negative rate. $\frac{TN}{TN + FP}$
+* **Pos Pred Value (Precision) **: probability that predicted positive is truly positive. $\frac{TP}{TP + FP}$ 
+* **Neg Pred Value**: probability that predicted negative is truly negative. $\frac{TN}{(TN + FN)}$ 
+* **F1**: harmonic mean of model's precision and recall. $\frac{2 * (Precision * Recall)}{Precision + Recall}$ 
+* **Prevalence**: truly positive observations as proportion of total number of observations. $\frac{TP + FN}{TP + FP + FN + TN}$ 
+* **Detection Rate**: true positives detected as proportion of entire total population. $\frac{TP}{TP + FP + FN + TN}$
+* **Detection Prevalence**: predicted positive events over total number of predictions. $\frac{TP + FP}{TP + FP + FN + TN}$
+* **Balanced Accuracy**: measure of model's that is especially useful when classes are imbalanced. $\frac{Sensitivity + Specificity}{2}$
+
+From the above table and classification metric definitions, we find that the **AIC Model** is more accurate, sensitive, specific, and precise. While the **OF Model** scores a higher `Detection Rate` and `Detection Prevalence`, the **AIC Model** scores higher across the board. It's consistently more accurate and capable of a higher rate of both positive and negative prediction.
+
+
+Thus, the **AIC Model** performs better for predicting neighborhoods at risk for crime (`target` = 1)  *and* not at risk for crime (`target` = 0) and is our choice model.
+
+................................................................................
+
+
+## Conclusion
+
+### Model Interpretation
+
+With the **AIC Model** selected, we'll revisit the summary statistics and interpret the coefficients:
+
+```{r}
+summary(final_log_model2)
+```
+
+For **continuous variables**, the interpretation is as follows:
+
+* For every unit increase in `zn`, the log odds of the neighborhood being at risk for crime decrease by 0.594.
+* For every unit increase in `nox`, the log odds of the neighborhood being at risk for crime increase by 214.437.
+* For every unit increase in `rm`, the log odds of the neighborhood being at risk for crime decrease by -3.463.
+* For every unit increase in `age`, the log odds of the neighborhood being at risk for crime increase by 0.201.
+* For every unit increase in `dis`, the log odds of the neighborhood being at risk for crime increase by 2.973.
+* For every unit increase in `rad`, the log odds of the neighborhood being at risk for crime increase by 2.534.
+* For every unit increase in `tax`, the log odds of the neighborhood being at risk for crime decrease by -0.032.
+* For every unit increase in `ptratio`, the log odds of the neighborhood being at risk for crime increase by 1.060.
+* For every unit increase in `medv`, the log odds of the neighborhood being at risk for crime increase by 0.741.
+
+For **engineered, categorical variables**, the interpretation is as follows:
+
+* If `age_greater_than_85` is 1 (the unit is greater than 85 years old), the log odds of the neighborhood being at risk for crime decrease by -1.737.
+* If `indus_flag` is 1 (proportion of non business acres per town is greater than 15), the log odds of the neighborhood being at risk for crime decrease by -17.509.
+* If `medv_and_tax` is 1 (median value of owner-occupied homes in $1000’s is < 17 and
+full-value property-tax rate per $10,000 is > 350), the log odds of the neighborhood being at risk for crime decrease by -9.813.
+* If `high_nox` is 1 (nitric oxides concentration (parts per 10 million) is > .6), the log odds of the neighborhood being at risk for crime increase by 15.305.
+* If `ptratio_and_lstat` is 1 (the parent-teacher ratio is > 20 and > 15% of population
+are lower status), the log odds of the neighborhood being at risk for crime increase by 4.042.
+
+From the above coefficient interpretations, we get an idea of the factors at play in predicting high crime neighborhoods (ie. pollution as a major predictor), but at this point we're yet to cast a prediction.
+
+
+### Prediction
+
+As a next natural step, it's the moment we've all been waiting for ...
+
+We prepare our data, cast predictions using our AIC optimized model and then output corresponding index numbers with the predicted `target` value:
+
+```{r}
+#prepare dataset
+final_test <- final_df %>% filter(dataset == 'test') %>% dplyr::select(-dataset,-target)
+
+#predict using selected model
+homework_predictions <- predict(final_log_model2, type = 'response', newdata = final_test)
+final_test$predictions <- ifelse(homework_predictions > 0.5, 1,0)
+
+#output predictions
+#final_test
+final_test$predictions
+
+```
+
+### In Closing
+In closing, here we present our findings for binary logistic regression modeling of the Boston Housing Dataset. Our objective was to predict whether a given neighborhood will be at risk for high crime levels. To approach this goal, we start with a full model that uses all feature variables in their native state as a benchmark. A model built with the raw data performed well with a predictive accuracy of ~92%. However, we were able to build upon this by iteratively improving our model by removing outliers (Model 2), engineering new features to capture the structure of existing feature variables (Model 3), and using AIC scores to optimize feature selection (Model 4). We select an AIC optimized model which improves our predictive accuracy to ~98%.
+
+## Appendix: `R` Statistical Code
+
+#### DEPENDANCIES
+```{r eval = FALSE, echo=T}
+library(knitr)
+library(skimr)
+library(visdat)
+library(inspectdf)
+library(corrplot)
+library(scales)
+library(tidyverse)
+library(tidyr)
+library(car)
+library(dplyr)
+library(kableExtra)
+library(tufte)
+library(MASS) #stepAIC
+library(rsample)
+library(BBmisc)
+library(tidymodels)
+options(scipen = 9)
+set.seed(123)
+```
+
+#### IMPORTING DATA
+
+```{r eval = FALSE, echo=T}
+#import train and test data sets
+train <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw3/crime-training-data_modified.csv')
+test <- readr::read_csv('https://raw.githubusercontent.com/dataconsumer101/data621/main/hw3/crime-evaluation-data_modified.csv')
+
+#add target column to test set
+test$target <- NA
+```
+
+### DATA EXPLORATION & BASELINE MODEL 
+```{r eval = FALSE, echo=T}
+#visualize a summary of the train dataset
+glimpse(train)
+```
+
+reformatting categorical features
+```{r eval = FALSE, echo=T}
+#convert features to factor
+train$chas <- as.factor(train$chas)
+test$chas <- as.factor(test$chas)
+
+train$target <- as.factor(train$target)
+test$target <- as.factor(test$target)
+
+#add dataset feature for future use while engineering the data
+train$dataset <- 'train'
+test$dataset <- 'test'
+```
+
+Visualize a summary of the categorical variables
+```{r eval = FALSE, echo=T}
+#setup visualization dataset and combine datasets
+data <- train %>% dplyr::select(-dataset)
+final_df <- rbind(train, test)
+
+#plot font size
+plotfontsize <- 16
+
+#revisit thorough summary statistics
+#skimr::skim(train) #output to HTML not PDF
+fig1 <- inspectdf::inspect_imb(data)
+fig1 <- ggplot( data = fig1, aes( x = as.factor( col_name ), 
+                                  y = pcnt, 
+                                  fill = col_name ) ) +
+    geom_bar( stat = "identity") +
+    geom_text( aes( label = paste( round( pcnt,2 ), '%, value =', value ) ), size = 6 ) +
+    theme( text = element_text(size=plotfontsize)) +
+    ggtitle( 'Categorical Predictor Variables', subtitle = 'balance of binary values' ) +
+    ylab( "% most common value") +
+    xlab( "Variable")
+fig1
+```
+
+Visualize distributions of the numeric feature variable
+```{r eval = FALSE, echo=T}
+fig2 <- inspectdf::inspect_num(data) %>% 
+  show_plot()
+fig2 + theme(text = element_text(size=plotfontsize))
+fig2
+```
+
+Visualize relationships of numeric variables to the target variable
+```{r eval = FALSE, echo=T}
+train_int_names <- train %>% select_if(is.numeric)
+int_names <- names(train_int_names)
+
+for (i in int_names) {
+  assign(paste0("var_",i), ggplot(train, aes_string(x = train$target, y = i)) + 
+          geom_boxplot(color = 'steelblue', 
+                       outlier.color = 'firebrick', 
+                       outlier.alpha = 0.35) +
+          #scale_y_continuous(labels = comma) +
+          labs(title = paste0(i,' vs target'), y = i, x= 'target') +
+          theme_minimal() + 
+          theme(
+            plot.title = element_text(hjust = 0.45),
+            panel.grid.major.y =  element_line(color = "grey", linetype = "dashed"),
+            panel.grid.major.x = element_blank(),
+            panel.grid.minor.y = element_blank(),
+            panel.grid.minor.x = element_blank(),
+            axis.ticks.x = element_line(color = "grey"),
+            text = element_text(size=plotfontsize)
+          ))
+}
+gridExtra::grid.arrange(var_age, var_dis, var_indus,var_lstat,
+                        var_medv,var_nox,var_ptratio,var_rad, 
+                        var_rm, var_tax, var_zn, nrow=4)
+```
+
+Visualize paired plots of the numeric feature variables
+```{r eval = FALSE, echo=T}
+pairs(train %>% select_if(is.numeric))
+```
+
+Visualize correlation matrix
+```{r eval = FALSE, echo=T}
+numeric_values <- train %>% select_if(is.numeric)
+train_cor <- cor(numeric_values)
+corrplot.mixed(train_cor, tl.col = 'black', tl.pos = 'lt')
+```
+
+**Model 1: Baseline model**
+```{r eval = FALSE, echo=T}
+#prepare input data
+train2 <- train %>% dplyr::select(-`dataset`)
+#fit "baseline" model
+log_model <- glm(target ~ ., family = binomial(link = "logit"), data = train2)
+#review summary statistics
+summary(log_model)
+
+#calculate deviance and p-value vs. null
+with(log_model, null.deviance - deviance)
+with(log_model, pchisq(null.deviance - deviance, 
+                       df.null - df.residual, 
+                       lower.tail = FALSE))
+
+#prepare confusion matrix
+log_preds <- predict(log_model, type = 'response')
+train2$preds <- ifelse(log_preds > 0.5, 1,0)
+train2$target <- factor(train2$target, levels = c(1,0), labels = c('Risk', 'Normal'))
+train2$preds <- factor(train2$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+caret::confusionMatrix(data = train2$preds, reference = train2$target)
+```
+
+use vif() to evaluate the multicolinearity of the feature variables
+```{r eval = FALSE, echo=T}
+#verify vif
+car::vif(log_model)
+```
+
+### DATA PREPARATION & MODEL BUILDING 
+Using cooks distance to evaluate outliers
+```{r eval = FALSE, echo=T}
+#use cooks distance to identify
+cooks_distance <- cooks.distance(log_model)
+influential <- as.numeric(names(cooks_distance)
+                          [(cooks_distance > 4 * mean(cooks_distance, na.rm = TRUE))]) 
+influential
+#train[influential,] #verify outliers
+#remove outliers
+train3 <- train[-influential, ]
+#train3
+```
+
+Remove outlier and refit binomial model
+```{r eval = FALSE, echo=T}
+#prepare input data
+train3 <- train3 %>% dplyr::select(-dataset)
+#fit model
+log_model2 <- glm(target ~ ., family = binomial(link = "logit"), data = train3) 
+#output summary statistics
+summary(log_model2) 
+```
+
+**Model 2: Outlier Optimized**
+Evaluate the impact of removing outliers on model accuracy
+```{r eval = FALSE, echo=T}
+#prepare confusion matrix
+log_preds2 <- predict(log_model2, type = 'response') 
+#assign predicted probabilities
+train3$preds <- ifelse(log_preds2 > 0.5, 1,0) 
+#assign predictions based on probabilities with 0.5 threshold
+train3$target <- factor(train3$target, levels = c(1,0), 
+                        labels = c('Risk', 'Normal')) #relabel target column
+train3$preds <- factor(train3$preds, levels = c(1,0), 
+                       labels = c('Risk', 'Normal')) #relabel predictions column
+caret::confusionMatrix(data = train3$preds, reference = train3$target) 
+#output confusion matrix
+```
+
+Prepare data for feature engineering (comnied train & test)
+```{r eval = FALSE, echo=T}
+#removing outliers from training set
+train <- train[-influential, ] 
+#combining datasets so we don't have to make features twice
+final_df <- rbind(train, test)
+#Creating new features:
+final_df$rm <- round(final_df$rm,0) #adaptation of original feature --> round 0.5 up
+final_df$age_greater_than_85 <- as.factor(ifelse(final_df$age >= 85, 1, 0))
+final_df$distance_band <- as.factor(ifelse(final_df$dis < 4, 1, 0))
+final_df$indus_flag <- as.factor(ifelse(final_df$indus > 15, 1, 0))
+final_df$lstat_and_rad <- as.factor(ifelse(final_df$lstat > 20 & final_df$rad > 4, 1, 0))
+final_df$lstat_flag <- as.factor(ifelse(final_df$lstat > 12, 1, 0))
+final_df$medv_and_tax <- as.factor(ifelse(final_df$medv < 17 & final_df$tax > 350, 1, 0))
+final_df$high_nox <- as.factor(ifelse(final_df$nox > .6, 1, 0))
+final_df$ptratio_and_lstat <- as.factor(ifelse(final_df$ptratio > 20 & final_df$lstat > 15,1,0))
+```
+
+**Model 3: Feature Engineered**
+```{r eval = FALSE, echo=T}
+#prepare input data: filter for training data and drop dataset feature from consideration
+train4 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+#fit model
+log_model3 <- glm(target ~ ., family = binomial(link = "logit"), data = train4)
+#output summary statistics
+summary(log_model3) 
+```
+
+Evaluate feature engineering for model accuracy
+```{r eval = FALSE, echo=T}
+#prepare confusion matrix
+log_preds3 <- predict(log_model3, type = 'response') 
+train4$preds <- ifelse(log_preds3 > 0.5, 1,0) 
+train4$target <- factor(train4$target, levels = c(1,0), labels = c('Risk', 'Normal'))
+train4$preds <- factor(train4$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+caret::confusionMatrix(data = train4$preds, reference = train4$target)
+```
+
+Engineer feature inclusion by AIC optimization
+```{r eval = FALSE, echo=T}
+#apply stepAIC to optimize model
+aic_opt_model <- stepAIC(log_model3)
+```
+
+**Model 4: AIC Optimized**
+prepare data and fit the AIC optimized model
+```{r eval = FALSE, echo=T}
+train5 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+#fit AIC optimized model
+final_model <- glm(target ~ zn + nox + rm + age + dis + rad + tax + 
+    ptratio + medv + age_greater_than_85 + indus_flag + medv_and_tax + 
+    high_nox + ptratio_and_lstat,
+               family = binomial(link = "logit"), data = train5)
+#output summary statistics
+summary(final_model) 
+```
+
+Evaluate model accuracy
+```{r eval = FALSE, echo=T}
+#prepare confusion matrix
+final_preds <- predict(final_model, type = 'response')
+train5$preds <- ifelse(final_preds > 0.5, 1,0)
+train5$target <- factor(train5$target, levels = c(1,0), labels = c('Risk', 'Normal'))
+train5$preds <- factor(train5$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+caret::confusionMatrix(data = train5$preds, reference = train5$target)
+```
+
+### MODEL SELECTION 
+Outlier and Feature Engineered Models Validation
+```{r eval = FALSE, echo=T}
+#set seed
+set.seed(123) #for reproducibility
+#prepare input data
+train6 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+#perform train-test split
+train_split <- initial_split(train6, prop = 0.80)
+final_train <- training(train_split)
+final_test <- testing(train_split)
+results <- final_test$target
+final_test$target <- NA
+#fit model
+final_log_model <- glm(target ~ ., family = binomial(link = "logit"), data = final_train)
+#prepare confusion matrix
+final_log_preds <- predict(final_log_model, type = 'response', newdata = final_test)
+final_test$preds <- ifelse(final_log_preds > 0.5, 1,0)
+final_test$target <- factor(results, levels = c(1,0), labels = c('Risk', 'Normal'))
+final_test$preds <- factor(final_test$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+#output to kable table
+OF_Model <- caret::confusionMatrix(data = final_test$preds, 
+                                   reference = final_test$target)$byClass
+AccuracyOF <- caret::confusionMatrix(final_test$preds, final_test$target)$overall['Accuracy']
+OF_Model <- data.frame(OF_Model)
+OF_Model <- rbind("Accuracy" = AccuracyOF, OF_Model)
+```
+
+AIC Optimized Model Validation
+```{r eval = FALSE, echo=T}
+#set seed
+set.seed(124) #for reproducibility
+#prepare input data
+train7 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+#perform train-test split
+train_split2 <- initial_split(train7, prop = 0.80)
+final_train2 <- training(train_split2)
+final_test2 <- testing(train_split2)
+results2 <- final_test2$target
+final_test2$target <- NA
+#fit model
+final_log_model2 <- glm(target ~ zn + nox + rm + age + dis + rad + tax + 
+    ptratio + medv + age_greater_than_85 + indus_flag + medv_and_tax + 
+    high_nox + ptratio_and_lstat, family = binomial(link = "logit"), data = final_train2)
+#prepare confusion matrix
+final_log_preds2 <- predict(final_log_model2, type = 'response', newdata = final_test2)
+final_test2$preds <- ifelse(final_log_preds2 > 0.5, 1,0)
+final_test2$target <- factor(results2, levels = c(1,0), labels = c('Risk', 'Normal'))
+final_test2$preds <- factor(final_test2$preds, levels = c(1,0), labels = c('Risk', 'Normal'))
+#output to kable table
+AIC_Model <- caret::confusionMatrix(data = final_test2$preds, 
+                                    reference = final_test2$target)$byClass
+AccuracyAIC <- caret::confusionMatrix(final_test2$preds, final_test2$target)$overall['Accuracy']
+AIC_Model <- data.frame(AIC_Model)
+AIC_Model <- rbind("Accuracy" = AccuracyAIC, AIC_Model)
+```
+
+Generate table fro Side-by-side model comparison
+```{r eval = FALSE, echo=T}
+#accuracy and classification statistics as a kable table 
+tabularview <- data.frame(OF_Model, AIC_Model)
+tabularview %>%  kableExtra::kbl() %>% 
+    kable_styling(bootstrap_options = c("striped", "hover", "condensed", "responsive"),
+                  latex_options="hold_position")
+```
+
+### CONCLUSIONS 
+Visualize summary for the selected model, Model 4: AIC Model
+```{r eval = FALSE, echo=T}
+summary(final_log_model2)
+```
+
+Use model to predict the target variable for the test dataset
+```{r eval = FALSE, echo=T}
+#prepare dataset
+final_test <- final_df %>% filter(dataset == 'test') %>% dplyr::select(-dataset,-target)
+#predict using selected model
+homework_predictions <- predict(final_log_model2, type = 'response', newdata = final_test)
+final_test$predictions <- ifelse(homework_predictions > 0.5, 1,0)
+#output predictions
+#final_test
+final_test$predictions
+```
+
+
+
+

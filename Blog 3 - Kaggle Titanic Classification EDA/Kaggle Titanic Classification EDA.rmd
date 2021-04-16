@@ -1,0 +1,95 @@
+---
+title: "Kaggle Titanic Classification EDA"
+author: "Christian Thieme"
+date: "4/3/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Import Libraries and Data
+
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+
+```{r message=FALSE, warning=FALSE}
+train <- readr::read_csv('C:/Users/chris/OneDrive/Master Of Data Science - CUNY/Winter 2021/DATA621/Business-Analytics-and-Data-Mining-with-Regression/Titanic Kaggle Blog Dataset/train.csv')
+test <- readr::read_csv('C:/Users/chris/OneDrive/Master Of Data Science - CUNY/Winter 2021/DATA621/Business-Analytics-and-Data-Mining-with-Regression/Titanic Kaggle Blog Dataset/test.csv')
+
+test$Survived <- NA 
+
+train$dataset <- 'train'
+test$dataset <- 'test'
+
+df <- rbind(train, test)
+
+```
+
+## High Level Look
+
+```{r}
+glimpse(train)
+```
+Glimpsing our data above, it looks like some of our categorical variables are coded as integers. Let's fix that:
+
+```{r}
+df$Survived <- as.factor(df$Survived)
+#df$Pclass <- as.factor(plyr::revalue(df$Survived, c())
+```
+
+
+```{r}
+dim(train %>% select_if(is.numeric))[2]
+```
+
+```{r}
+names(train %>% select_if(is.numeric))
+```
+
+```{r}
+dim(train %>% select_if(is.character))[2]
+
+```
+```{r}
+names(train %>% select_if(is.character))
+```
+
+```{r}
+summary(train)
+```
+
+```{r}
+colSums(is.na(train))/dim(train)[1] * 100
+```
+```{r message=FALSE, warning=FALSE}
+df %>% 
+  group_by(Sex) %>%
+  summarize(count = n()) %>%
+  mutate(percent = count/ sum(count))
+```
+
+```{r message=FALSE, warning=FALSE}
+df %>% 
+  group_by(Sex, Pclass) %>%
+  summarize(count = n()) %>%
+  mutate(percent = count/ sum(count))
+```
+
+
+```{r message=FALSE, warning=FALSE}
+df %>% 
+  filter(dataset == 'train') %>%
+  select(Sex, Survived) %>%
+  group_by(Sex, Survived) %>%
+  summarize(count = n()) %>%
+  mutate(percent = count/ sum(count)) %>%
+  ggplot() + 
+  aes(x = Survived, y = percent, fill = Sex) + 
+  geom_col(position = "dodge") + 
+  geom_text(aes(label = paste0(round(percent,2)*100,'%')), position=position_dodge(width=0.9), vjust = -.5)
+```
+
