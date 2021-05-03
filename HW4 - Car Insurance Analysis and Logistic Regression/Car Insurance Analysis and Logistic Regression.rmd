@@ -1,0 +1,1197 @@
+---
+title: 'HW #4'
+author: "Critical Thinking Group One"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: no
+    theme: cerulean
+    highlight: tango
+    font-family: Arial
+  pdf_document:
+    toc: yes
+---
+
+```{=html}
+<style type="text/css">
+
+code {
+  font-family: "Consolas";
+  font-size: 11px;
+}
+
+pre {
+  font-family: "Consolas";
+  font-size: 11px;
+}
+
+</style>
+```
+# Authorship
+
+**Critical Thinking Group 1**
+
+-   Angel Claudio
+-   Bonnie Cooper
+-   Manolis Manoli
+-   Magnus Skonberg
+-   Christian Thieme
+-   Leo Yi
+
+
+```{r setup, include=FALSE}
+# Libraries and Options
+
+knitr::opts_chunk$set(echo = F, warning = F, message = F, eval = T, 
+                      fig.height = 5, fig.width = 10) 
+
+library(knitr)
+library(skimr)
+library(visdat)
+library(inspectdf)
+library(corrplot)
+library(scales)
+library(tidyverse)
+library(tidyr)
+library(bestglm)
+library(pROC)
+library(car)
+library(ggcorrplot)
+library(mice)
+library(caret)
+library(plyr)
+library(dplyr)
+library(MASS)
+library(zoo)
+
+
+options(scipen = 9)
+set.seed(123)
+
+boxplot_depend_vs_independ <- function(df_train, target_name) {
+
+  train_int_names <- df_train %>% select_if(is.numeric)
+
+  int_names <- names(train_int_names)
+  
+  myGlist <- vector('list', length(int_names))
+  
+  names(myGlist) <- int_names
+  
+  for (i in int_names) {       
+ 
+   myGlist[[i]] <- 
+       ggplot(df_train, aes_string(x = target_name, y = i)) + 
+        geom_boxplot(color = 'steelblue', outlier.color = 'firebrick', 
+                     outlier.alpha = 0.35) +
+        labs(title = paste0(i,' vs target'), y = i, x= 'target') +
+        theme_minimal() + 
+        theme(
+          plot.title = element_text(hjust = 0.45),
+          panel.grid.major.y =  element_line(color = "grey", 
+                                             linetype = "dashed"),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.ticks.x = element_line(color = "grey")
+        )
+       
+      }
+
+    myGlist <- within(myGlist, rm(target_name))
+    gridExtra::grid.arrange(grobs = myGlist, ncol = 3)
+}
+
+
+plot_corr_matrix <- function(dataframe, significance_threshold){
+  title <- paste0('Correlation Matrix for significance > ',
+                  significance_threshold)
+  
+  df_cor <- dataframe %>% mutate_if(is.character, as.factor)
+  
+  df_cor <- df_cor %>% mutate_if(is.factor, as.numeric)
+  #run a correlation and drop the insignificant ones
+  corr <- cor(df_cor)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > significance_threshold) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  #print table
+  # print(corr)
+  #turn corr back into matrix in order to plot with corrplot
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  #plot correlations visually
+  corrplot(mtx_corr,
+           title=title,
+           mar=c(0,0,1,0),
+           method='color', 
+           tl.col="black", 
+           na.label= " ",
+           addCoef.col = 'black',
+           number.cex = .9)
+}
+```
+
+
+```{r import-data, message=FALSE, warning=FALSE, eval=TRUE}
+test_URL <- paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                   'data-sources/master/csv/insurance-evaluation-data.csv')
+
+train_URL <- paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                    'data-sources/master/csv/insurance_training_data.csv')
+
+train <- readr::read_csv(train_URL)
+test <- readr::read_csv(test_URL)
+```
+
+# Abstract
+
+<p>
+We will explore, analyze and model a data set containing approximately 8,000
+records. Each row represents a customer at an auto insurance company. Each record has 
+two response variables. The first response variable, TARGET_FLAG, is a 1 or a 0.
+A “1” means that the person was in a car crash. A zero means that the person was
+not in a car crash. The second response variable is TARGET_AMT. This value is 
+zero if the person did not crash their car. But if they did crash their car, 
+this number will be a value greater than zero.
+</p>
+
+<p>
+Our objective is to build multiple linear regression and binary logistic 
+regression models on the training data to predict the probability that a person 
+will crash their car and also the amount of money it will cost if the person
+does crash their car. We will only use the variables given to us (or variables 
+that we derive from the variables provided).
+</p>
+
+
+<!--Add relevant background image below-->
+
+```{r results = 'asis', out.width="800px"}
+download.file(url = paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                        'data-sources/master/Picts/insurance%20logos%206.png'),
+          destfile = "image.png",
+          mode = 'wb')
+knitr::include_graphics(path = "image.png")
+```
+<!-- ![](https://raw.githubusercontent.com/AngelClaudio/data-sources/master/Picts/insurance%20logos%206.png){width=150%} -->
+
+# Data Exploration
+
+## Structure of Data
+
+```{r glimpse-data}
+glimpse(train)
+```
+
+Right away we can see we'll have some work to do. It appears that many features that are factors have imported as characters or doubles. It is also clear that there may be some ordinal levels within some of the factors. We'll note this for our data cleaning section. We also note that the training set has 26 columns and 8,161 rows. 
+
+Before transformations, lets see how many of our columns are numeric and how many are characters:
+
+**Numeric**:
+
+```{r}
+dim(train %>% select_if(is.numeric))[2]
+```
+
+**Character**: 
+
+```{r}
+dim(train %>% select_if(is.character))[2]
+```
+
+## Data Metrics
+
+Next, we'll quickly look at a summary of each of our features to quickly get a bird's eye view of our distributions: 
+
+```{r}
+summary(train)
+```
+
+Some notes of interest: 
+
+* KIDSDRIV: Max is 4
+* AGE: minimum age is 16 which we'd expect and oldest individual is 81. There are 6 NA values
+* HOMEKIDS: Max is 5
+* TRAVTIME: It appears there may be some outliers here. 75% of the population is below 44 minutes. Max value is 142
+* TIF: The majority of people are not long time customers
+* CLM_FREQ: Maximum is over 5 years
+* MVR_PTS: 75% have 3 or less, maximum is 13
+* CAR_AGE: Appears to have some data that is wrong -- shows minimum as -3. Max is 28
+
+## NA's Summary
+
+Before going farther, let's see how extensive missing values are in our dataset.
+
+```{r check-for-missing-values}
+colSums(is.na(train))
+```
+
+There are missing values in YOJ, INCOME, HOME_VAL, JOB, and CAR_AGE, however it does not appear to be pervasive. The feature with the most NA's, JOB, is only missing ~7% of its values. Let's see if the missing data is random in nature or if there is an underlying pattern.
+
+```{r aggr-plots, results=F, fig.height=8, fig.width=10}
+VIM::aggr(train, col=c('green','red'), numbers=T, sortVars=T,
+          cex.axis = .7,
+          ylab=c("Proportion of Data", "Combinations and Percentiles"))
+```
+
+We note that:
+
+* Overall 74% of the data is free of missing values.
+* Both JOB and CAR_AGE each represent almost 5% of NAs.
+* As runner ups INCOME, HOME_VALU, and YOJ each represent about 4% of NAs.
+* The low % of combinations seem to indicate that the NAs are random in nature. 
+
+We will address these NAs in the data transformation section.
+
+## Data Exploration Summary
+
+<p>The dataset has 27 variables and 8,161 observations. We summarize the following issues: </p>
+
+* NAs can be found in features like CAR_AGE and YOJ 
+* There appear to be outliers in several of the features
+* There are character type data that should be numeric such as income
+* There are character type data that should be factor such as marital status
+* The index feature is not needed
+
+# Data Preparation
+
+```{r join-data}
+# ***We don't need to show or talk about this, this is for our sake, audience
+#    doesn't care.
+
+# bind data to make transformations easier
+
+train$dataset <- 'train'
+test$dataset <- 'test'
+
+final_df <- rbind(train, test)
+```
+
+## Exclusions
+
+As part of our data preparation, we will drop the "Index" feature as there is no use for it.
+
+```{r exclusions}
+final_df <-  dplyr::select(final_df, -c('INDEX'))
+```
+
+**Data After Exclusions**
+
+```{r}
+glimpse(dplyr::select(final_df, -c('dataset')))
+```
+
+## Character to Numeric Type
+
+Additionally, we'll change the following character type features to numeric:
+
+* INCOME
+* HOME_VAL
+* OLDCLAIM
+* BLUEBOOK
+
+
+```{r}
+final_df  <- dplyr::mutate(final_df, INCOME = as.numeric(gsub('[$,]', '', INCOME)),
+                            HOME_VAL = as.numeric(gsub('[$,]', '', HOME_VAL)),
+                            BLUEBOOK = as.numeric(gsub('[$,]', '', BLUEBOOK)),
+                            OLDCLAIM = as.numeric(gsub('[$,]', '', OLDCLAIM)))
+```
+
+**Features after Transformation from character to numeric**
+
+```{r}
+glimpse(dplyr::select(final_df, c('INCOME','HOME_VAL', 'BLUEBOOK','OLDCLAIM')))
+```
+
+## Character to Factor Type
+
+<p>
+We also identified that there would be numerous columns that would have to
+be transformed from a character data type to factor. Their final state is shown below after the transformation:
+</p>
+
+```{r}
+final_df <- dplyr::mutate(final_df, 
+                          MSTATUS = as.factor(str_remove(MSTATUS, "^z_")),
+                          SEX = as.factor(str_remove(SEX, "^z_")),
+                          # <HIgh School not a typo, means less than HS
+                          EDUCATION = as.factor(str_remove(EDUCATION, "^z_")),
+                          JOB = as.factor(str_remove(JOB, "^z_")),
+                          CAR_TYPE = as.factor(str_remove(CAR_TYPE, "^z_")),
+                          URBANICITY = as.factor(str_remove(URBANICITY, "^z_")),
+                          CAR_USE = as.factor(CAR_USE),
+                          REVOKED = as.factor(REVOKED),
+                          PARENT1 = as.factor(PARENT1),
+                          RED_CAR = as.factor(RED_CAR),
+                          TARGET_FLAG = as.factor(TARGET_FLAG))
+```
+
+
+**Features after Transformation from Character to Factor**
+
+```{r}
+sapply(dplyr::select(final_df, c('MSTATUS','SEX', 'JOB', 'CAR_TYPE',
+                              'URBANICITY', 'CAR_USE', 'REVOKED','PARENT1',
+                              'RED_CAR', 'TARGET_FLAG')), levels)
+```
+
+## Imputation
+
+As noted in our EDA section, there are NAs in several of our features. Based on our analysis above, as there weren't any distinct patterns within missing data, we'll impute NAs using linear interpolation (`zoo` library) as well as filling in the blanks in JOBS with new level, 'Unknown'.  
+
+```{r imputation}
+# impute numerics
+final_df <- final_df %>% mutate_at(vars(c("CAR_AGE", "YOJ", "AGE", "INCOME", 
+                                    "HOME_VAL")),
+                             ~ifelse(is.na(.), na.approx(.), .)) #na.approx from the zoo library to perform linear interpolation on NA values
+
+# impute NAs in job
+final_df$JOB <- as.character(final_df$JOB)
+final_df$JOB[is.na(final_df$JOB)] <- "Unknown"
+final_df$JOB <- as.factor(final_df$JOB)
+
+sapply(dplyr::select(final_df, c('JOB')), levels)
+```
+
+**Results Post-Imputation**
+```{r missing-count, eval=T}
+sapply(final_df, function(x) sum(is.na(x)))
+```
+
+```{r missing-plot, results=F, fig.height=8, fig.width=10}
+VIM::aggr(final_df, col=c('green','red'), numbers=T, sortVars=T,
+          cex.axis = .7,
+          ylab=c("Proportion of Data", "Combinations and Percentiles"))
+```
+
+
+```{r, eval=F}
+
+encoding_edu <- c('<High School'=0,'High School'=1,'Bachelors'=2,'Masters'=3,
+                  'PhD'=4)
+
+final_df$EDUCATION <- as.integer(plyr::revalue(final_df$EDUCATION, 
+                                               encoding_edu))
+
+table(final_df$EDUCATION)
+```
+
+## Data After Clean Up
+
+```{r}
+glimpse(dplyr::select(final_df, -c('dataset')))
+```
+
+
+```{r unbind-data}
+# unbind data
+train <- dplyr::select(dplyr::filter(final_df, dataset == 'train'),
+                       -c('dataset'))
+
+
+test <- dplyr::select(dplyr::filter(final_df, dataset == 'test'),
+                       -c('dataset'))
+```
+
+
+## Factor Analysis
+
+Let's take a look at the makeup of our factor variables. We'll look at the most common category within these variables. 
+
+```{r common-levels}
+inspectdf::inspect_imb(train) %>% show_plot()
+```
+
+In looking at the above output, notes of interest are: 
+
+* 12% of the population has had their license revoked within the last 7 years (% seems high)
+* A majority of the data comes from people in highly urban or urban areas
+* 27% of the population has been involved in an accident 
+* Most cars aren't red
+* Majority of the data is from private care use
+* More than half of the population is married
+* Almost a 50/50 split on M vs F
+* SUV's make up more than 1/4 of the dataset
+* Blue collar workers make up ~1/4 of the data
+
+
+## Summary of Common Levels
+
+```{r show-variable-distributions, fig.height=8}
+inspectdf::inspect_num(train) %>% show_plot()
+```
+
+In looking at the plots above, we note: 
+
+* AGE looks normally distributed, which we'd expect
+* BLUEBOOK values are right skewed. This may mean there is a correlation between the income of the individual and the type of education and job they have
+* CAR_AGE: This one seems off. It looks like 25% of cars are new, yet the BLUEBOOK values are pretty low. Seems it would be difficult to buy a "new" car at such low values
+* EDUCATION: 35%+ have less than a bachelor's degree
+* HOME_VAL: It appears home value of 0 is pretty frequent. Instead of having a home with $0 value, this probably indicates they don't own a home. We'll need to clean this up and create a categorical variable to capture this
+* HOMEKIDS: Most people don't have kids
+* INCOME: Income is very right skewed. Looks like over 60% of the population makes $50K or less
+* KIDSDRIV: Majority of people don't have kids at home that are driving 
+* TIF: Appears to be a multi-modal distribution, possibly indicating sub-populations or errors within the data. 30%+ are new customers 
+* TRAVTIME: This is a bi-modal distribution. We may need to explore if there is a sub-population here. 
+* YOJ: Another bi-modal distribution. Are these distributions related to age and people becoming old enough to drive (turning 16 years old)? 
+* TARGET_AMT: Heavily right skewed. We'll look in our transformation section to see if this target variable could benefit from a transformation
+
+We can see above that many of these features have 0s indicating that the variable does not have a value for the field. We'll need to make some categorical features to capture this signal in our feature engineering section. 
+
+
+Now let's look at the relationship between our variables and TARGET_FLAG
+
+
+**Boxplots for when Predictor is TARGET_FLAG**
+
+<!--setting eval to false during testing, takes too long--->
+```{r boxplot2, fig.height=15, fig.width=12, eval=T, echo=T} 
+# target_name <- 'your_target_name'
+target_name <- 'TARGET_FLAG'
+
+boxplot_depend_vs_independ(train, target_name)
+```
+
+In looking at the above boxplots, we note the following: 
+
+* KIDSDRIVE appears to have no relationship with TARGET_FLAG
+* AGE appears to have a weak relationship with TARTGET_FLAG. Those with a lower age, on average, get in more wrecks
+* HOMEKIDS doesn't appear to have a meaningful relationship
+* YOJ does look like it has a weak relationship with TARGET_FLAG, the less YOJ, the more wrecks
+* INCOME also appears to have  a relationship, the lower income, the more likely to wreck
+* HOME_VAL appears to have a relationship and is probably somewhat skewed because of the 0s in the distribution
+* TRAVTIME looks to have a weak relationship, with those who have longer travel times being more likely to wreck
+* BLUEBOOK has a relationship as well, with those with lower bluebook values being more likely to wreck
+* TIF appears to have a relationship with those who have been customers longer being less likely to wreck
+* OLDCLAIM appears to have a relationship and those who have higher claim values are more likely to wreck
+* CLAIM_FREQ definitely has a relationship 
+* MVR_PTS has a strong relationship as well with those with more points being more likely to wreck
+* CAR_AGE seems to have a strong relationship as well with older car owners being less likely to wreck
+
+Having looked at our features, let's now take a look at a correlation plot to see the strength between our variables.
+
+## Correlation Matrix
+
+```{r correlation-matrix, fig.height = 10, fig.width = 10, warning=FALSE}
+plot_corr_matrix(train, .2)
+```
+
+As noted previously, multi-collinearity is not a huge issue with this dataset. We note the following variables that are collinear: 
+
+* HOMEKIDS and KIDSDRIV
+* AGE and HOMEKIDS
+* INCOME and HOME_VAL
+* INCOME and BLUEBOOK and CAR_AGE
+* CLM_FREQ and OLDCLAIM
+* CLM_FREQ and MVR_PTS
+
+## Feature Engineering
+
+From observations made from the data exploration and preparation above, we create several flag variables to captured observed trends in the data:  
+
+1. Brand New Car Flag
+2. Zero Claims History Flag
+3. Home Ownership Flag
+4. Clean Motor Vehicle Record Flag
+5. Years on Job Flag
+
+```{r feature_engineering}
+
+# flag brand new cars
+final_df$CAR_AGE <- ifelse(final_df$CAR_AGE < 1, 1, final_df$CAR_AGE)
+final_df$CAR_AGE_BRAND_NEW_FLAG <- ifelse(final_df$CAR_AGE == 1, 1, 0)
+
+
+# Claim Frequency
+# table(train$CLM_FREQ)
+# zero claims
+final_df$CLM_FREQ_ZERO <- ifelse(final_df$CLM_FREQ == 0, 1, 0)
+
+
+# Home Value
+# table(train$HOME_VAL)
+# no homes? renters?
+final_df$HOME_VAL_ZERO <- ifelse(final_df$HOME_VAL == 0, 1, 0)
+
+
+# Motor Vehicle Record Points
+# table(train$MVR_PTS)
+# no motor vehicle record points, clean record
+final_df$MVR_PTS_ZERO <- ifelse(final_df$MVR_PTS == 0, 1, 0)
+
+
+# no years on job 
+# table(train$YOJ)
+final_df$YOJ_ZERO <- ifelse(final_df$YOJ == 0, 1, 0)
+
+glimpse( final_df )
+```
+
+# Build Models
+
+From the insights we gained from EDA, we move forward by implementing two main modeling approaches. We begin by splitting the training data into train and validation sets. For our first modeling approach, we use `TARGET_FLAG` as a binary response variable in conjunction with the original and engineered featured variables of our processed data. The second modeling approach uses the `TARGET_AMT` response variable. `TARGET_AMT` is a continuous numeric feature which we use to deploy multiple linear regression models. We developed several models for both the binary regression and multivariate linear regression approaches and evaluate each model's performance to select the best model.  
+
+```{r prep_data}
+train_data <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+# remove target amt since it has a whole bunch of NAs
+train_data$TARGET_AMT <- NULL
+
+split <- caret::createDataPartition(train_data$TARGET_FLAG, p=0.85, list=FALSE)
+
+partial_train <- train_data[split, ]
+
+validation <- train_data[ -split, ]
+
+```
+
+## Modeling the Binary Response Variable
+Here we describe binomial modeling that utilizes the feature set to predict the binary response variable, `TARGET_FLAG`. Where `TARGET_FLAG` coded '1' is a car that was in a crash and '0' otherwise.
+
+
+### Model #1: Binary Logistic Model
+To find a baseline for performance with the Binary Response Variable, we begin with a binary logistic regression model that includes all feature variables (original and engineered).  
+
+Model 1 Summary:  
+
+```{r binary-model}
+#I changed the order to move from conceptually simple models to more complex (randomforest)
+binary.mdl <- glm(TARGET_FLAG~., family=binomial, data=partial_train)
+
+summary(binary.mdl)
+```
+
+We can see the AIC result from a binomial model using the logit link function.
+To invoke a parsimonious approach, another model will be derived using a 
+stepwise method to further narrow down models based on significance and 
+possible negative effects of multicollinearity.
+
+### Model #2: Stepwise Binary Logistic Model
+
+Using the full model as a starting point, the following summarizes the output of a backward stepwise by AIC model selection process:
+
+```{r stepwise, results=F}
+binary.mdl.w.step <- step(binary.mdl)
+```
+
+```{r stepwise-summary}
+summary(binary.mdl.w.step)
+```
+
+The stepwise model by AIC reduces the dimensionality of the model and results in a more parsimonious fit of the data. For example, Model 1 involves 28 feature variables and fits 43 coefficients whereas the stepwise Model 2 uses 19 feature variables and fits 34 model coefficients. Additionally, we see Model 2 AIC is lower indicating lower estimated prediction error. This suggests that, in addition to being a simple model, the stepwise method works better to create an overall better fit to the data.
+
+In looking at the coefficients, most of these make sense intuitively. What is interesting is how big a difference URBANICITY makes to the log odd percent. It does makes sense that individuals who live in highly urban areas would be involved in more accidents since there are so many more people on the roads. 
+
+### Model 3: Random Forest Model
+
+There are other approaches to modeling a binary response variable other than using binary linear regression. Here, we describe the fit of a random forest model that levies the same full feature variable set as Model 1 
+
+```{r random-forest}
+rf <- randomForest::randomForest(TARGET_FLAG~., data=partial_train)
+rf
+```
+
+## Multivariate Regression Model
+Here we describe several multivariate regression modeling efforts to utilize the feature set to predict the continuous numeric response variable, `TARGET_AMT`. `TARGET_AMT` gives the monetary amount of costs incurred if a car was involved in a crash. 
+
+
+```{r mv_split}
+train_mv_mdl <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+train_mv_mdl <- train_mv_mdl[train_mv_mdl$TARGET_FLAG == 1, ]
+train_mv_mdl$TARGET_FLAG <- NULL
+
+split_mv <- caret::createDataPartition(train_mv_mdl$TARGET_AMT, p=0.85, list = F)
+
+partial_train_mv <- train_mv_mdl[split_mv, ]
+
+validation_mv <- train_mv_mdl[-split_mv, ]
+
+#summary(partial_train_mv)
+```
+
+### Model 4 - Multiple Linear Regression
+
+To begin multivariate methods, we model the response variable using the full set of feature variables
+
+```{r mv_reg_mdl_one}
+mv.mdl <- train(TARGET_AMT ~., data = partial_train_mv, method = "lm",
+                 trControl = trainControl(method = "cv", number = 10,
+                                                     savePredictions = TRUE),
+                tuneLength = 5, preProcess = c("center", "scale"))
+
+summary(mv.mdl$finalModel)
+
+lm1 <- mv.mdl
+```
+As we can see from the summary output, this approach does not yield a statistically significant fit to the data and has a very low $R^2$ value. Model 4 gives a very poor fit to the data, but perhaps this can be improved upon.
+
+### MV Model 5 - Stepwise Multiple Linear Regression
+
+Using Model 4 as a starting point, here we describe the results of a backwards stepwise by AIC multiple linear regression model selection process.
+
+```{r mv_model_2}
+lm2_base <- lm(TARGET_AMT ~ ., data = partial_train_mv)
+
+lm_step <- stepAIC(lm2_base, trace = F)
+
+summary(lm_step)
+
+lm2 <- lm_step
+```
+The stepwise model selection resulted in a statistically significant p-value. However, the $R^2$ value indicates the Model 5 does not describe much variability in the data. So far, the quality of the multivariate linear regression approaches have left much to be desired. Next, we perform transformations to select feature variables in an effort to improve the fit.
+
+### Model 6 - Multivariate Linear Regression with Box-Cox Transformations
+
+Here we describe a model built with the intention of testing box cox transformations on non-normally distributed variables, with model selection based on a manual selection process, including only significant independent feature variables.
+
+```{r mv_model_3}
+train_mv_mdl %>%
+  select_if(is.numeric) %>%
+  dplyr::mutate(row = row_number()) %>%
+  tidyr::gather(field, val, -row) %>%
+  dplyr::filter(val > 0) %>%
+  tidyr::spread(field, val) %>%
+  dplyr::select(-row, -CAR_AGE_BRAND_NEW_FLAG, -CLM_FREQ_ZERO, -HOME_VAL_ZERO, -MVR_PTS_ZERO, -YOJ_ZERO) %>%
+  powerTransform()
+
+lm3_base <- lm(log(TARGET_AMT) ~ . + I(BLUEBOOK^0.5) + I(MVR_PTS^.33) + I(CAR_AGE^.5) + I(CLM_FREQ^0.33)
+               , data = partial_train_mv)
+
+summary(lm3_base)
+
+lm3_step <- stepAIC(lm3_base, trace = F, direction = 'backward')
+
+summary(lm3_step)
+
+lm3 <- lm3_step
+
+# plot(lm3)
+
+# partial_train_mv$pred <- predict(lm3)
+# 
+# ggplot(partial_train_mv, aes(x = pred, y = log(TARGET_AMT))) +
+#   geom_point(alpha = .2) +
+  # geom_smooth(se = F, method = 'lm')
+```
+As with Model 5, while Model 6 results in a statistically significant p-value, the Adjusted $R^2$ suggests that Model 6 has little predictive power over our target variable.
+
+### Model 7 - AIC Stepwise model selection of Weighted Least Squares Multivariate Linear Regression
+
+```{r mv_model_4}
+lm4_base <- lm(TARGET_AMT ~ ., data = partial_train_mv)
+
+resid_sq <- lm4_base$residuals^2
+
+lm4_wls <- lm(TARGET_AMT ~ ., data = partial_train_mv, weights = 1/resid_sq)
+
+#summary(lm4_wls)
+
+lm4_wls_step <- stepAIC(lm4_wls, trace = F)
+
+summary(lm4_wls_step)
+
+# partial_train_mv$pred <- predict(lm4_wls_step)
+# 
+# ggplot(partial_train_mv, aes(x = pred, y = TARGET_AMT)) +
+#   geom_point(alpha = .2) +
+#   geom_smooth(se = F, method =)
+
+# plot(lm4_wls_step)
+
+lm4 <- lm4_wls_step
+```
+
+Our Adjusted $R^2$ value here is 99% which, at face value, appears like a miraculous improvement upon our earlier modeling attempts. However, the weighted least squares $R^2$ value cannot be interpreted in the same way that the unweighted $R^2$ from ordinary least squares linear regression models. Regardless, based on the F-statistic and the p-value, it looks like the model is extremely significant as well. 
+
+In looking at these coefficients we note some things that we wouldn't have expected: 
+
+* The older you are the more expensive your wreck will be (perhaps older people drive more expensive cars)
+* The more kids you have at home, the more expensive your wreck will be
+* Being a man significantly increases the cost of your wreck (maybe correlated with the cost of the car being driven?)
+* Masters and PhD level individuals have more expensive wrecks (maybe because they drive more expensive cars?)
+* The longer your travel time, the less expensive the wreck will cost
+* Bluebook value does not seem to be as a large a factor as expected
+* Red cars actually would cost less in an accident (opposite of urban legend)
+
+# Model evaluation and selection
+
+## Binary logistic regression
+
+In looking at our binary logistic regression models, we'll evaluate our binary logistic regression model (Model 1), the stepwise binary logistic regression model (Model 2), as well as the Random Forest model (Model 3) as a benchmark for accuracy. 
+
+
+### Evaluate Model 1 Binary Logistic Model
+
+```{r evaluate-bi modial, echo=FALSE, eval=TRUE}
+y_hat_glm <- predict(binary.mdl, validation, type = "response")
+
+y_hat_glm_binar <- (y_hat_glm>0.5)*1
+
+mean(validation$TARGET_FLAG==y_hat_glm_binar)
+
+(CM <- table(true= validation$TARGET_FLAG, predicted = y_hat_glm_binar))
+```
+We see the accuracy of this model is 79%. Our precision is 93% and our sensitivity is 82%.
+
+### Evaluate Model 2 Stepwise Binary Logistic Model
+
+```{r evaluate-stepwise, echo=FALSE, eval=TRUE}
+y_hat_glm <- predict(binary.mdl.w.step, validation, type = "response")
+
+y_hat_glm_binar <- (y_hat_glm>0.5)*1
+
+mean(validation$TARGET_FLAG==y_hat_glm_binar)
+
+(CM <- table(true= validation$TARGET_FLAG, predicted = y_hat_glm_binar))
+```
+Our stepwise model produces *VERY* similar results to our previous model. Results vary only slightly. 
+
+### Evaluate Model 3 Random Forest
+
+```{r evaluation-of-random-forest}
+val <- validation
+val$pred <- predict(rf, val)
+val$pred <- as.factor(val$pred)
+random_forest_results <- confusionMatrix(val$pred, val$TARGET_FLAG)
+random_forest_results
+```
+Here we see our random forest model is in line with our other models as far as 
+accuracy, however, we see a trade off in terms of precision and sensitivity. Our
+accuracy is only **`r random_forest_results[["overall"]][['Accuracy']]`%**
+whereas our sensitivity is now 
+**`r random_forest_results[['byClass']][['Sensitivity']]`%**. 
+
+For our current model, we'd probably be most interested in sensitivity since
+we're concerned with identifying positive outcomes and the cost of a
+false-positive is low. Were we looking for the most accurate model, we'd move 
+forward with the random forest model, however, for this assignment we'll 
+continue forward with our most accurate binary logistic regression model. 
+
+### Summary for Binary Logistic Regression Models
+
+We can see that out of all the models the Random Forest and the Binomial Model
+using Stepwise were practically tied, with the Random Forest being slightly more
+accurate. As mentioned previously, we'll move forward with the stepwise logistic regression model. 
+
+## Multivariate Linear Regression
+
+Multivariate linear regression approaches resulted in statistically significant fits to the data, however, the model predictions are have room for improvement. The figure below shows each multivariate model's predictions plotted as a function of response variable. Ideally, this plot would result in an approximately linear agreement. However, we see a lot of deviation which suggests our multivariate models we deployed do not make accurate predictions of the numeric target variable `TARGET_AMT`
+
+```{r mv_eval}
+validation_mv$model_4 <- predict(lm1, newdata = validation_mv)
+validation_mv$model_5 <- predict(lm2, newdata = validation_mv)
+validation_mv$model_6 <- predict(lm3, newdata = validation_mv)
+validation_mv$model_7 <- predict(lm4, newdata = validation_mv)
+
+validation_mv %>%
+  dplyr::select(TARGET_AMT, model_4, model_5, model_6, model_7) %>%
+  tidyr::gather(model, prediction, -TARGET_AMT) %>%
+  ggplot(aes(x = TARGET_AMT, y = prediction)) +
+  geom_point(alpha = .2) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3) +
+  facet_wrap(~model)
+```
+
+```{r}
+#To further support this, we examine the model residuals as a function target variable. The residual variance is not constant as a function of `TARGET_AMT` which suggest that there is room for improvement for accurately predicting the numeric target variable (the amount of money it will cost if a person crashes their car).
+# validation_mv$Model_4 <- with(validation_mv, pred1 - TARGET_AMT)
+# validation_mv$Model_5 <- with(validation_mv, pred2 - TARGET_AMT)
+# validation_mv$Model_6 <- with(validation_mv, pred3 - TARGET_AMT)
+# validation_mv$Model_7 <- with(validation_mv, pred4 - TARGET_AMT)
+# 
+# validation_mv %>%
+#   dplyr::select(TARGET_AMT, Model_4, Model_5, Model_6, Model_7) %>%
+#   tidyr::gather(model, residuals, -TARGET_AMT) %>%
+#   ggplot(aes(x = TARGET_AMT, y = residuals)) +
+#   geom_point(alpha = .2) +
+#   geom_hline(yintercept = 0, alpha = .3) +
+#   facet_wrap(~model)
+
+# cat('Model 4:', cor(validation_mv$TARGET_AMT, validation_mv$model_4)^2)
+# cat('Model 5:', cor(validation_mv$TARGET_AMT, validation_mv$model_5)^2)
+# cat('Model 6:', cor(validation_mv$TARGET_AMT, validation_mv$model_6)^2)
+# cat('Model 7:', cor(validation_mv$TARGET_AMT, validation_mv$model_7)^2)
+
+
+validation_mv$resid_4 <- with(validation_mv, model_4 - TARGET_AMT)
+validation_mv$resid_5 <- with(validation_mv, model_5 - TARGET_AMT)
+validation_mv$resid_6 <- with(validation_mv, model_6 - TARGET_AMT)
+validation_mv$resid_7 <- with(validation_mv, model_7 - TARGET_AMT)
+
+cat('RMSE\n',
+    'Model 4: ', sqrt(sum(validation_mv$resid_4^2) / nrow(validation_mv)), '\n',
+    'Model 5: ', sqrt(sum(validation_mv$resid_5^2) / nrow(validation_mv)), '\n',
+    'Model 6: ', sqrt(sum(validation_mv$resid_6^2) / nrow(validation_mv)), '\n',
+    'Model 7: ', sqrt(sum(validation_mv$resid_7^2) / nrow(validation_mv))
+)
+
+```
+
+Comparing the RMSE of each of the models on the holdout validation dataset, it looks like Model 5 has the smallest errors.
+
+### Model Selection Summary
+In our analysis, we find that multivariate linear regression modeling approaches have a lot of room for improvement towards predictions of the numeric target feature `TARGET_AMT`. However, the binary logistic regression models were able to give predictions of the binary response variable `TARGET_FLAG` that are reasonably accurate. Moving forward, we will use the Stepwise Binary Logistic Model (Model 2) to predict the probability that a person will crash their car (`TARGET_FLAG`) and the Stepwise Multivariate Linear Regression (Model 5) to give prediction estimates for the amount of money it will cost if a person crashes their car (`TARGET_AMT`).
+
+# Make Prediction on Test Data with Best Model
+
+**Logistic regression predictions:** - predictions on `TARGET_FLAG`, the probability that a person will crash their car
+
+```{r echo=T}
+test <- final_df %>% filter(dataset == 'test') %>% dplyr::select(-dataset)
+
+logistic_binary_final <- predict(binary.mdl.w.step, test, type = "response")
+head(logistic_binary_final)
+```
+
+**Multivariate Regression Predictions:** - predictions on `TARGET_AMT`, amount of money it will cost if a person crashes their car
+
+```{r echo=T}
+MVPred <- predict(lm2, newdata = test)
+head( MVPred)
+```
+
+# Reference Section:
+
+* [Practical Guide to Logistic Regression Analysis in R](https://www.hackerearth.com/practice/machine-learning/machine-learning-algorithms/logistic-regression-analysis-r/tutorial/)
+
+# Appendix: `R` Statistical Code
+
+## Dependancies
+```{r eval = FALSE, echo=T}
+# Libraries and Options
+knitr::opts_chunk$set(echo = F, warning = F, message = F, eval = T, 
+                      fig.height = 5, fig.width = 10) 
+
+library(knitr)
+library(skimr)
+library(visdat)
+library(inspectdf)
+library(corrplot)
+library(scales)
+library(tidyverse)
+library(tidyr)
+library(bestglm)
+library(pROC)
+library(car)
+library(ggcorrplot)
+library(mice)
+library(caret)
+library(plyr)
+library(dplyr)
+library(MASS)
+library(zoo)
+
+
+options(scipen = 9)
+set.seed(123)
+
+boxplot_depend_vs_independ <- function(df_train, target_name) {
+
+  train_int_names <- df_train %>% select_if(is.numeric)
+
+  int_names <- names(train_int_names)
+  
+  myGlist <- vector('list', length(int_names))
+  
+  names(myGlist) <- int_names
+  
+  for (i in int_names) {       
+ 
+   myGlist[[i]] <- 
+       ggplot(df_train, aes_string(x = target_name, y = i)) + 
+        geom_boxplot(color = 'steelblue', outlier.color = 'firebrick', 
+                     outlier.alpha = 0.35) +
+        labs(title = paste0(i,' vs target'), y = i, x= 'target') +
+        theme_minimal() + 
+        theme(
+          plot.title = element_text(hjust = 0.45),
+          panel.grid.major.y =  element_line(color = "grey", 
+                                             linetype = "dashed"),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.ticks.x = element_line(color = "grey")
+        )
+       
+      }
+
+    myGlist <- within(myGlist, rm(target_name))
+    gridExtra::grid.arrange(grobs = myGlist, ncol = 3)
+}
+
+
+plot_corr_matrix <- function(dataframe, significance_threshold){
+  title <- paste0('Correlation Matrix for significance > ',
+                  significance_threshold)
+  
+  df_cor <- dataframe %>% mutate_if(is.character, as.factor)
+  
+  df_cor <- df_cor %>% mutate_if(is.factor, as.numeric)
+  #run a correlation and drop the insignificant ones
+  corr <- cor(df_cor)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > significance_threshold) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  #print table
+  # print(corr)
+  #turn corr back into matrix in order to plot with corrplot
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  #plot correlations visually
+  corrplot(mtx_corr,
+           title=title,
+           mar=c(0,0,1,0),
+           method='color', 
+           tl.col="black", 
+           na.label= " ",
+           addCoef.col = 'black',
+           number.cex = .9)
+}
+```
+
+## Importing Data
+
+```{r eval = FALSE, echo=T}
+test_URL <- paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                   'data-sources/master/csv/insurance-evaluation-data.csv')
+
+train_URL <- paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                    'data-sources/master/csv/insurance_training_data.csv')
+
+train <- readr::read_csv(train_URL)
+test <- readr::read_csv(test_URL)
+```
+
+## Data Exploration
+```{r eval = FALSE, echo=T}
+glimpse(train) #basic visualization
+dim(train %>% select_if(is.numeric))[2] #number of numeric features
+dim(train %>% select_if(is.character))[2] #number categorical features
+summary(train) #basic summary
+colSums(is.na(train)) #missingness by column
+#visualization to find patterns in missingness
+VIM::aggr(train, col=c('green','red'), numbers=T, sortVars=T,
+          cex.axis = .7,
+          ylab=c("Proportion of Data", "Combinations and Percentiles"))
+```
+
+## Data Preparation
+```{r eval = FALSE, echo=T}
+train$dataset <- 'train'
+test$dataset <- 'test'
+final_df <- rbind(train, test) #combine test/train to preprocess the same
+final_df <-  dplyr::select(final_df, -c('INDEX')) #drop INDEX feature
+#change the following from character to numeric
+final_df  <- dplyr::mutate(final_df, INCOME = as.numeric(gsub('[$,]', '', INCOME)),
+                            HOME_VAL = as.numeric(gsub('[$,]', '', HOME_VAL)),
+                            BLUEBOOK = as.numeric(gsub('[$,]', '', BLUEBOOK)),
+                            OLDCLAIM = as.numeric(gsub('[$,]', '', OLDCLAIM)))
+#transform from character to factor:
+final_df <- dplyr::mutate(final_df, 
+                          MSTATUS = as.factor(str_remove(MSTATUS, "^z_")),
+                          SEX = as.factor(str_remove(SEX, "^z_")),
+                          # <HIgh School not a typo, means less than HS
+                          EDUCATION = as.factor(str_remove(EDUCATION, "^z_")),
+                          JOB = as.factor(str_remove(JOB, "^z_")),
+                          CAR_TYPE = as.factor(str_remove(CAR_TYPE, "^z_")),
+                          URBANICITY = as.factor(str_remove(URBANICITY, "^z_")),
+                          CAR_USE = as.factor(CAR_USE),
+                          REVOKED = as.factor(REVOKED),
+                          PARENT1 = as.factor(PARENT1),
+                          RED_CAR = as.factor(RED_CAR),
+                          TARGET_FLAG = as.factor(TARGET_FLAG))  
+#na.approx from the zoo library to perform linear interpolation on NA values                          
+final_df <- final_df %>% mutate_at(vars(c("CAR_AGE", "YOJ", "AGE", "INCOME", 
+                                    "HOME_VAL")),
+                             ~ifelse(is.na(.), na.approx(.), .))
+# impute NAs in job
+final_df$JOB <- as.character(final_df$JOB)
+final_df$JOB[is.na(final_df$JOB)] <- "Unknown"
+final_df$JOB <- as.factor(final_df$JOB)        
+#visualize missingness post imputation
+sapply(final_df, function(x) sum(is.na(x))) 
+VIM::aggr(final_df, col=c('green','red'), numbers=T, sortVars=T,
+          cex.axis = .7,
+          ylab=c("Proportion of Data", "Combinations and Percentiles"))
+# unbind data
+train <- dplyr::select(dplyr::filter(final_df, dataset == 'train'),
+                       -c('dataset'))
+test <- dplyr::select(dplyr::filter(final_df, dataset == 'test'),
+                       -c('dataset'))   
+# factor analysis. visualize most common factors
+inspectdf::inspect_imb(train) %>% show_plot()
+# visualize a summary of common levels
+inspectdf::inspect_num(train) %>% show_plot()
+# boxplots of features x predictor
+target_name <- 'TARGET_FLAG'
+boxplot_depend_vs_independ(train, target_name)  
+#plot the correlation matrix
+plot_corr_matrix(train, .2)   
+# feature engineering
+# flag brand new cars
+final_df$CAR_AGE <- ifelse(final_df$CAR_AGE < 1, 1, final_df$CAR_AGE)
+final_df$CAR_AGE_BRAND_NEW_FLAG <- ifelse(final_df$CAR_AGE == 1, 1, 0)
+# zero claims
+final_df$CLM_FREQ_ZERO <- ifelse(final_df$CLM_FREQ == 0, 1, 0)
+# Home Value
+final_df$HOME_VAL_ZERO <- ifelse(final_df$HOME_VAL == 0, 1, 0)
+# Motor Vehicle Record Points
+final_df$MVR_PTS_ZERO <- ifelse(final_df$MVR_PTS == 0, 1, 0)
+# no years on job 
+final_df$YOJ_ZERO <- ifelse(final_df$YOJ == 0, 1, 0)                                                                      
+                                                 
+```
+
+## Build Models
+```{r eval = FALSE, echo=T}
+# Prepare data
+train_data <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+train_data$TARGET_AMT <- NULL
+split <- caret::createDataPartition(train_data$TARGET_FLAG, p=0.85, list=FALSE)
+partial_train <- train_data[split, ]
+validation <- train_data[ -split, ]
+
+# Model 1
+binary.mdl <- glm(TARGET_FLAG~., family=binomial, data=partial_train)
+summary(binary.mdl)
+
+# Model 2 
+binary.mdl.w.step <- step(binary.mdl)
+summary(binary.mdl.w.step)
+
+# Model 3
+rf <- randomForest::randomForest(TARGET_FLAG~., data=partial_train)
+
+# Prepare data 
+train_mv_mdl <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+train_mv_mdl <- train_mv_mdl[train_mv_mdl$TARGET_FLAG == 1, ]
+train_mv_mdl$TARGET_FLAG <- NULL
+split_mv <- caret::createDataPartition(train_mv_mdl$TARGET_AMT, p=0.85, list = F)
+partial_train_mv <- train_mv_mdl[split_mv, ]
+validation_mv <- train_mv_mdl[-split_mv, ]
+
+# Model 4
+mv.mdl <- train(TARGET_AMT ~., data = partial_train_mv, method = "lm",
+                 trControl = trainControl(method = "cv", number = 10,
+                                                     savePredictions = TRUE),
+                tuneLength = 5, preProcess = c("center", "scale"))
+summary(mv.mdl$finalModel)
+lm1 <- mv.mdl
+
+# Model 5
+lm2_base <- lm(TARGET_AMT ~ ., data = partial_train_mv)
+lm_step <- stepAIC(lm2_base, trace = F)
+summary(lm_step)
+lm2 <- lm_step
+
+# Model 6
+train_mv_mdl %>%
+  select_if(is.numeric) %>%
+  dplyr::mutate(row = row_number()) %>%
+  tidyr::gather(field, val, -row) %>%
+  dplyr::filter(val > 0) %>%
+  tidyr::spread(field, val) %>%
+  dplyr::select(-row, -CAR_AGE_BRAND_NEW_FLAG, -CLM_FREQ_ZERO, -HOME_VAL_ZERO, -MVR_PTS_ZERO, -YOJ_ZERO) %>%
+  powerTransform()
+lm3_base <- lm(log(TARGET_AMT) ~ . + I(BLUEBOOK^0.5) + I(MVR_PTS^.33) + I(CAR_AGE^.5) + I(CLM_FREQ^0.33)
+               , data = partial_train_mv)
+summary(lm3_base)
+lm3_step <- stepAIC(lm3_base, trace = F, direction = 'backward')
+summary(lm3_step)
+lm3 <- lm3_step
+
+# Model 7
+lm4_base <- lm(TARGET_AMT ~ ., data = partial_train_mv)
+resid_sq <- lm4_base$residuals^2
+lm4_wls <- lm(TARGET_AMT ~ ., data = partial_train_mv, weights = 1/resid_sq)
+summary(lm4_wls)
+lm4_wls_step <- stepAIC(lm4_wls, trace = F)
+summary(lm4_wls_step)
+# 
+```
+Model Selection
+```{r eval = FALSE, echo=T}
+#evaluate Model 1
+y_hat_glm <- predict(binary.mdl, validation, type = "response")
+y_hat_glm_binar <- (y_hat_glm>0.5)*1
+mean(validation$TARGET_FLAG==y_hat_glm_binar)
+(CM <- table(true= validation$TARGET_FLAG, predicted = y_hat_glm_binar))
+#Evaluate Model 2
+y_hat_glm <- predict(binary.mdl.w.step, validation, type = "response")
+y_hat_glm_binar <- (y_hat_glm>0.5)*1
+mean(validation$TARGET_FLAG==y_hat_glm_binar)
+(CM <- table(true= validation$TARGET_FLAG, predicted = y_hat_glm_binar))
+#Evaluate Model 3
+val <- validation
+val$pred <- predict(rf, val)
+val$pred <- as.factor(val$pred)
+confusionMatrix(val$pred, val$TARGET_FLAG)
+
+# Evaluating Model 4-7
+validation_mv$pred1 <- predict(lm1, newdata = validation_mv)
+validation_mv$pred2 <- predict(lm2, newdata = validation_mv)
+validation_mv$pred3 <- predict(lm3, newdata = validation_mv)
+#validation_mv$pred4 <- predict(lm4, newdata = validation_mv)
+validation_mv %>%
+  dplyr::select(TARGET_AMT, pred1, pred2, pred3) %>%
+  tidyr::gather(model, prediction, -TARGET_AMT) %>%
+  ggplot(aes(x = TARGET_AMT, y = prediction)) +
+  geom_point(alpha = .2) +
+  geom_abline(slope = 1, intercept = 0, alpha = .3) +
+  facet_wrap(~model)
+validation_mv$resid1 <- with(validation_mv, pred1 - TARGET_AMT)
+validation_mv$resid2 <- with(validation_mv, pred2 - TARGET_AMT)
+validation_mv$resid3 <- with(validation_mv, pred3 - TARGET_AMT)
+#validation_mv$resid4 <- with(validation_mv, pred4 - TARGET_AMT)
+validation_mv %>%
+  dplyr::select(TARGET_AMT, resid1, resid2, resid3) %>%
+  tidyr::gather(model, residuals, -TARGET_AMT) %>%
+  ggplot(aes(x = TARGET_AMT, y = residuals)) +
+  geom_point(alpha = .2) +
+  geom_hline(yintercept = 0, alpha = .3) +
+  facet_wrap(~model)
+
+# RMSE calc
+validation_mv$resid_4 <- with(validation_mv, model_4 - TARGET_AMT)
+validation_mv$resid_5 <- with(validation_mv, model_5 - TARGET_AMT)
+validation_mv$resid_6 <- with(validation_mv, model_6 - TARGET_AMT)
+validation_mv$resid_7 <- with(validation_mv, model_7 - TARGET_AMT)
+
+cat('RMSE\n',
+    'Model 4: ', sqrt(sum(validation_mv$resid_4^2) / nrow(validation_mv)), '\n',
+    'Model 5: ', sqrt(sum(validation_mv$resid_5^2) / nrow(validation_mv)), '\n',
+    'Model 6: ', sqrt(sum(validation_mv$resid_6^2) / nrow(validation_mv)), '\n',
+    'Model 7: ', sqrt(sum(validation_mv$resid_7^2) / nrow(validation_mv))
+)
+  
+```
+## Model Predictions
+```{r eval = FALSE, echo=T}
+test <- final_df %>% filter(dataset == 'test') %>% dplyr::select(-dataset)
+logistic_binary_final <- predict(binary.mdl.w.step, test, type = "response")
+logistic_binary_final
+predict(lm3, newdata = test)
+```
+

@@ -6,3 +6,7 @@
 
 #### [Classification Metrics](https://rpubs.com/christianthieme/742363)
 
+#### [Logistic Regression - Identifying High Risk Neighborhoods](https://rpubs.com/christianthieme/755745)
+
+#### [Car Insurance Analysis and Logistic Regression](https://rpubs.com/christianthieme/764382)
+
