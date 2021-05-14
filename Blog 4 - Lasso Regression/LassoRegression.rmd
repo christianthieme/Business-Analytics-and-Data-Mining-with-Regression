@@ -1,0 +1,45 @@
+---
+title: "Lasso Regression"
+author: "Christian Thieme"
+date: "5/13/2021"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ISLR)
+library(tidyverse)
+library(tidymodels)
+library(glmnet)
+```
+
+## Using Lasso Regression for Variable Selection
+
+Lasso regression, like ridge regression, penalizes variables in a model and shrinks them. However, lasso regression, unlike ridge regression, will shrink some of the coefficients to 0. With this in mind, we can use lasso regression to perform variable selection. Coefficients that have not been shrunk to 0, are those that should be included in the model. 
+
+We'll demonstrate this with a well known baseball dataset called Hitters in which the goal is to predict a player's salary.  
+
+```{r}
+Hitters <- na.omit(Hitters)
+Hitters <- Hitters %>% dplyr::select(-NewLeague)
+glimpse(Hitters)
+```
+In taking a glimpse at the dataset, you can see that there are 19 features that we can use to predict our target variable `Salary`. How do we know which of these variables are actually useful in predicting salary? This is where Lasso Regression comes in. In using lasso regression we'll need to adjust our dataframe to a matrix. 
+
+```{r}
+x <- model.matrix(Salary ~ ., Hitters)[,-1]
+y <- Hitters$Salary
+```
+
+Next, we can train a lasso model. The `glmnet` function works for both ridge and lasso regression. Alpha is set to 0 for ridge regression and is set to 1 for lasso regression. The optimal lambda can be found through a grid search. Here I show the value found for this particular dataset. Next we can run `predict`, with type 'coefficients' to see the coefficients. 
+
+```{r}
+model <- glmnet(x,y, alpha = 1, lambda = 2.436791)
+coefficients <- predict(model, type = "coefficients", s = 2.436791)
+coefficients
+```
+In viewing the output above, we can see that 5 variables have been forced to 0 (the dots). The coefficients in this model that have not been forced to 0 are those that should be included in the model. 
+
+Here we have shown that lasso regression can be used for more than just regression. We can use it as a means of variable selectio as well. 

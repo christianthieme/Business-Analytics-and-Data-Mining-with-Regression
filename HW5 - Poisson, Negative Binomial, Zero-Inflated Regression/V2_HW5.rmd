@@ -1,0 +1,731 @@
+---
+title: 'HW #5'
+author: "Critical Thinking Group One"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: no
+    theme: cerulean
+    highlight: tango
+    font-family: Arial
+---
+
+```{=html}
+<style type="text/css">
+
+code {
+  font-family: "Consolas";
+  font-size: 11px;
+}
+
+pre {
+  font-family: "Consolas";
+  font-size: 11px;
+}
+
+</style>
+```
+
+# Authorship
+
+**Critical Thinking Group 1**
+
+-   Angel Claudio
+-   Bonnie Cooper
+-   Manolis Manoli
+-   Magnus Skonberg
+-   Christian Thieme
+-   Leo Yi
+
+
+```{r setup, include=FALSE}
+# Libraries and Options
+
+knitr::opts_chunk$set(echo = F, warning = F, message = F, eval = T, 
+                      fig.height = 5, fig.width = 10) 
+
+library(ggplot2)
+library(knitr)
+library(inspectdf)
+library(corrplot)
+library(tidyverse)
+library(tidyr)
+library(car)
+library(AER)
+library(faraway)
+library(mice)
+library(vcd)
+library(caret)
+library(kableExtra)
+library(boot)
+library(pscl) #predict.zeroinfl
+library(MASS)
+library(VIM) #KNN imputation
+
+```
+
+```{r custom-functions, include=FALSE}
+
+options(scipen = 9)
+set.seed(123)
+
+boxplot_depend_vs_independ <- function(df_train, target_name) {
+
+  train_int_names <- df_train %>% select_if(is.numeric)
+  int_names <- names(train_int_names)
+  myGlist <- vector('list', length(int_names))
+  names(myGlist) <- int_names
+  
+  for (i in int_names) {       
+ 
+   myGlist[[i]] <- 
+       ggplot(df_train, aes_string(x = target_name, y = i)) + 
+        geom_boxplot(color = 'steelblue', outlier.color = 'firebrick', 
+                     outlier.alpha = 0.35) +
+        labs(title = paste0(i,' vs target'), y = i, x= 'target') +
+        theme_minimal() + 
+        theme(
+          plot.title = element_text(hjust = 0.45),
+          panel.grid.major.y =  element_line(color = "grey", 
+                                             linetype = "dashed"),
+          panel.grid.major.x = element_blank(),
+          panel.grid.minor.y = element_blank(),
+          panel.grid.minor.x = element_blank(),
+          axis.ticks.x = element_line(color = "grey")
+        )
+       
+      }
+
+    myGlist <- within(myGlist, rm(target_name))
+    gridExtra::grid.arrange(grobs = myGlist, ncol = 3)
+}
+
+plot_corr_matrix <- function(dataframe, significance_threshold){
+  title <- paste0('Correlation Matrix for significance > ',
+                  significance_threshold)
+  
+  df_cor <- dataframe %>% mutate_if(is.character, as.factor)
+  
+  df_cor <- df_cor %>% mutate_if(is.factor, as.numeric)
+  #run a correlation and drop the insignificant ones
+  corr <- cor(df_cor)
+  #prepare to drop duplicates and correlations of 1     
+  corr[lower.tri(corr,diag=TRUE)] <- NA 
+  #drop perfect correlations
+  corr[corr == 1] <- NA 
+  #turn into a 3-column table
+  corr <- as.data.frame(as.table(corr))
+  #remove the NA values from above 
+  corr <- na.omit(corr) 
+  #select significant values  
+  corr <- subset(corr, abs(Freq) > significance_threshold) 
+  #sort by highest correlation
+  corr <- corr[order(-abs(corr$Freq)),] 
+  #print table
+  # print(corr)
+  #turn corr back into matrix in order to plot with corrplot
+  mtx_corr <- reshape2::acast(corr, Var1~Var2, value.var="Freq")
+  
+  #plot correlations visually
+  corrplot(mtx_corr,
+           title=title,
+           mar=c(0,0,1,0),
+           method='color', 
+           tl.col="black", 
+           na.label= " ",
+           addCoef.col = 'black',
+           number.cex = .9)
+}
+```
+
+
+```{r import-data, message=FALSE, warning=FALSE, eval=TRUE}
+test_URL <- paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                   'data-sources/master/csv/wine-evaluation-data.csv')
+
+train_URL <- paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                    'data-sources/master/csv/wine-training-data.csv')
+
+train <- readr::read_csv(train_URL)
+test <- readr::read_csv(test_URL) %>% dplyr::rename('INDEX' = 'IN')
+
+train$dataset <- 'train'
+test$dataset <- 'test'
+
+final_df <- rbind(train, test)
+
+```
+
+
+# Abstract
+
+<p>
+We will explore, analyze and model a data set containing approximately 12,000
+records representing various commercially available wines. The variables are primarily related to the chemical properties of the wine being sold. The response variable is the number of sample cases of wine that were purchased by wine distribution companies after sampling a wine. These cases would be used to provide tasting samples to restaurants and wine stores around the United States. The more sample cases purchased, the more likely the wine is to be sold at a high end restaurant. A large wine manufacturer is studying the data in order to predict the number of wine cases ordered based upon the wine characteristics. If the wine manufacturer can predict the number of cases, then that manufacturer will be able to adjust their wine offering to maximize sales.
+</p>
+
+<p>
+Our objective is to build a **count regression model** to predict the number of cases of wine that will be sold given certain properties of the wine.
+</p>
+
+```{r results = 'asis', out.width="800px"}
+download.file(url = paste0('https://raw.githubusercontent.com/AngelClaudio/',
+                        'data-sources/master/Picts/wine_degustation.png'),
+          destfile = "image.png",
+          mode = 'wb')
+knitr::include_graphics(path = "image.png")
+```
+
+# Data Exploration
+
+The goal of exploratory data analysis is to enhance the precision of the questions we’re asking while building a firm understanding of the data at hand. The aim is to familiarize ourselves with the status of missing values, outliers, predictive strength, and correlation to then take the actions necessary to optimize our data set when we prepare our data prior to model building.
+
+First, we get to know the structure and value ranges and proportion of missing values and correlation with the target variable. We then more thoroughly explore and address the high proportion of missing `STARS` values, visualize independent variable distributions, visualize independent variables vs. target via boxplot to spot outliers and such, and then explore whether multicollinearity exists within our set. 
+
+After this point, we should have enough insight to prepare our data and build our model(s).
+
+## Data Structure
+
+To start, we utilize the built-in `glimpse` method to gain insight into the dimensions, variable characteristics, and value range for our training dataset:
+
+```{r glimpse-data}
+glimpse(train)
+
+```
+
+From above, we see that our training dataset has **16** features (of type double) and **12,795** observations, with varying ranges (shown across each row). In looking at the data it appears that `LabelAppeal`, `AcidIndex`, and `STARS` appear to be categorical features. We'll investigate this more in the EDA process.
+
+We also note that:
+
+* The `INDEX` variable appears to be impertinent 
+* STARS appears to have quite a few NAs
+* There appears to be a significant difference in the scale of many of the features (ie. `STARS` vs. `TotaSulfurDioxide`).We may need to normalize this dataset before modeling
+
+Now let's get a high level look at our distributions: 
+
+```{r}
+summary(train)
+```
+We note that many of these features minimums are below 0. 
+
+
+## Missing Values 
+
+First, we'll drop `INDEX` from consideration and then investigate our missing values:
+
+```{r, eval = T, echo = F}
+
+#drop INDEX
+final_df <- final_df %>% dplyr::select(-INDEX)
+```
+
+
+```{r aggr-plots1, results=F, fig.height=8, fig.width=15}
+VIM::aggr(final_df %>% filter(dataset == 'train'), col=c('green','red'), numbers=T, sortVars=T,
+          cex.axis = .7,
+          ylab=c("Proportion of Data", "Combinations and Percentiles"))
+```
+
+```{r}
+# missing_count <- colSums(is.na(train))
+# percent <- (colSums(is.na(train))/dim(train)[1]) * 100
+# 
+# 
+# missing_vals <- data.frame(missing_count = missing_count, percent = percent) %>% arrange(desc(percent)) %>% filter(percent > 0) %>% kbl() %>% kable_minimal()
+# 
+# missing_vals
+```
+
+From the proportion chart above on the left we can see that:
+
+* `STARS` has ~26% missing values. These missing values most likely indicate that the wine has not been rated by a team of experts. 
+* `Sulphates` has ~10% of it's values missing. This feature does have a 0 value, so these values appear to be missing as opposed to signifying no sulphates. 
+* `TotalSulfurDioxide` has ~5% missing values. This feature does have a 0 value, so these values appear to be missing as opposed to signifying no sulfur dioxides. 
+* `Alcohol` has ~5% missing values. Alcohol does not appear to have a 0 value, so we'll need to investigate if blanks indicate no alcohol in the wine
+* `FreeSulfurDioxide` has ~5% missing values. FreeSulfurDioxide does not appear to have a 0 value, so we'll need to investigate if blanks indicate no FreeSulfurDioxide in the wine
+* `Chlorides` has ~5% missing values. This feature does have a 0 value, so these values appear to be missing as opposed to signifying no chlorides 
+* `ResidualSugar` has ~5% missing values.This feature does have a 0 value, so these values appear to be missing as opposed to signifying no residual sugars 
+* `pH` has ~3% missing values. pH does not appear to have a 0 value, so we'll need to investigate if blanks indicate a 0 pH value (seems unlikely)
+
+On the combinations and percentiles chart we note that combinations look fairly random with less than 2.5% of missing data having the same pattern.
+
+## Data Type Conversions
+
+We noted earlier that several data type conversions were necessary. We'll convert `LabelAppeal`, `AcidIndex`, and `STARS` to factors. Before changing `STARS`, we'll need to convert the nulls to 'Not Rated'. 
+
+```{r}
+final_df$STARS <- final_df$STARS %>% tidyr::replace_na('Not Rated')
+
+final_df  <- final_df %>% dplyr::mutate(
+  LabelAppeal = factor(LabelAppeal, levels = sort(unique(final_df$LabelAppeal)), ordered = TRUE), 
+  AcidIndex = factor(AcidIndex, levels = sort(unique(final_df$AcidIndex)), ordered = TRUE),
+  STARS = factor(STARS, levels = c('Not Rated', '1','2','3','4'), ordered = TRUE)
+)
+
+#final_df
+
+```
+
+
+## Numeric Variable Distributions
+
+Earlier we'd noted the vast difference in ranges between many of our variables. To explore this point further and gain greater insight as to the distribution for each of our variables, we visit the plots produced via utilization of inspectdf's `inspect_num` function:
+
+```{r}
+#Variable distributions
+inspectdf::inspect_num(final_df %>% filter(dataset == 'train')) %>% 
+  show_plot()
+
+```
+
+From the distribution plots above we note that:
+
+* `Alcohol` has a relatively normal distribution with a mean value of ~10 which makes sense when we consider this variable is representative of alcohol content.
+* `Chlorides` has a significant frequency (40%) spike at ~0. *We may consider using this variable value as a flag.*
+* `CitricAcid` has a significant frequency (50%) spike at ~0. *We may consider using this variable value as a flag.*
+* `Density` has a significant frequency (50%) spike at ~0.99. *We may consider using this variable value as a flag.*
+* `FixedAcidity`has a significant frequency (35%) spike at ~3. *We may consider using this variable value as a flag.*
+* `FreeSulfurDioxide` has a significant frequency (40%) spike at ~0. *We may consider using this variable value as a flag.*
+* `pH` follows a relatively normal distribution with a significant (50%) frequency spike centered about 3. Better wines generally sit in the 3-4 pH range which it appears the majority of our wines do.
+* `ResidualSugar` has a significant frequency (40%) spike at 0. *We may consider using this variable value as a flag.*
+* `Sulphates` follows a normal distribution centered between 0 and 1. 50-60% of values fall between 0 and 1.5. 
+* `TARGET` follows a bimodal distribution. Aside from the spike at 0 it appears to be a normal distribution centered about 4. This means that case sales of 4 is most common while those above and below reduce in frequency until we reach 0 (where it spikes again). 
+* `TotalSulfurDioxide` has two significant frequency spikes. One (30%) at ~100 and another (~20%) at 0. *We may consider using these variable values as flags.*
+* `VolatileAcidity` has a significant (45%) frequency spike at 0. *We may consider using this variable value as a flag.*
+
+From the distributions above, we confirm that our model building and analysis may be improved by incorporating  flag / dummy variables to account for the numerous, significant frequency spikes observed above.
+
+## Boxplots
+
+Now that we've got a basic understanding of the distribution of each of our features, let's turn our attention to their relationship with `TARGET` which is our target variable. In beginning this analysis, we found that understanding the relationship with our target variable was difficult without also seeing the quantity of observations in each group. With this in mind, we've layered our boxplots on top of a dotplot in order to see both quartiles and outliers, as well as the quantity of observations. 
+
+```{r boxplot2, fig.height=10, fig.width=12} 
+#Utilize custom-built box plot generation function
+
+train_int_names <- final_df %>% filter(dataset == 'train') %>% select_if(is.numeric) 
+int_names <- names(train_int_names)
+myGlist <- vector('list', length(int_names))
+#myGlist$TARGET <- NULL   how do we get rid of TARGET here? 
+names(myGlist) <- int_names
+
+for (i in int_names) {       
+
+ myGlist[[i]] <- 
+    ggplot(train_int_names) +
+    aes_string(x = as.factor(train_int_names$TARGET), y = i) + 
+     
+    geom_jitter(color = "gray", alpha = 0.35) +
+    geom_boxplot(color = 'steelblue', outlier.color = 'firebrick', 
+                     outlier.alpha = 0.35) +  
+      labs(title = paste0(i,' vs target'), y = i, x= 'target') +
+      theme_minimal() + 
+      theme(
+        plot.title = element_text(hjust = 0.45),
+        panel.grid.major.y =  element_line(color = "grey", 
+                                           linetype = "dashed"),
+        panel.grid.major.x = element_blank(),
+        panel.grid.minor.y = element_blank(),
+        panel.grid.minor.x = element_blank(),
+        axis.ticks.x = element_line(color = "grey")
+      )
+     
+    }
+
+  myGlist <- within(myGlist, rm(target_name))
+  gridExtra::grid.arrange(grobs = myGlist, ncol = 4)
+
+```
+
+From above we gather that:
+
+* There are outliers in all of our numeric feature
+* The purchase of 1, 7, and 8 boxes is much rarer than 2-6. We would expect 7 and 8 to be rare, however, we weren't necessarily expecting to see 1 box be rare
+* The range for 7-8 boxes sold is much lower than the others (except 1 box) 
+* It does not appear that there are very many significant relationships between the features and our target variable, with the exception of: `Density` - range and median value for 8 boxes is significantly higher than others and `Alcohol` - range and median value for 7 sold boxes is quite a bit higher than others, however, 8 boxes sold is significantly lower than all others
+
+## Contingency Tables
+
+Now, let's create contingency tables for each of our categorical variables so we can identify any relationships: 
+
+**LabelAppeal**
+
+```{r}
+table(final_df$LabelAppeal, final_df$TARGET)
+```
+In looking at the contingency table above, we can see that there appears to be a relationship between `LabelAppeal` and the number of cases purchased, `TARGET`. The higher the label appeal, the more cases purchased. 
+
+**AcidIndex**
+
+Acid index is a proprietary method of testing total acidity using a weighted average. 
+  
+```{r}
+table(final_df$AcidIndex, final_df$TARGET)
+```
+In looking at the table above, we don't see a linear relationship between these variables, however, we do note that it looks like wines that sell more boxes, typically have an acid index between 6 and 9. 
+
+**STARS**
+
+STARS is a wine rating by a team of experts. The higher the number, the better the rating. 
+
+```{r}
+table(final_df$STARS, final_df$TARGET)
+```
+In general, we do see a fairly strong relationship here. The higher the rating, the more boxes sold. Additionally, as noted before, there are many wines that have not been rated. 
+
+## Correlation Matrix
+
+Having reviewed the relationship each of our numeric and categorical features has with `TARGET`, we turn our attention to exploring the relationship these variables have with one another via **correlation matrix**. We consider only variables with a correlation significant > 0.1 in our plot:
+
+```{r correlation-matrix , warning=FALSE}
+#Utilize custom-built correlation matrix generation function
+plot_corr_matrix(final_df %>% filter(dataset == 'train'), -1)
+
+```
+
+Although `FixedAcidity` is correlated with `AcidityIndex`, while `LabelAppeal` and `AcidIndex` are  correlated with `STARS`, it appears that **multicollinearity is not a concern**. Additionally, the above output confirms our (3) strongest predictors while highlighting the weak predictive potential of our independent, numeric variables. It is interesting that our numeric predictors have such a weak relationship with `TARGET`, where our 3 categorical features have a strong relationship.
+
+## EDA Summary
+
+The training dataset has 15 variables (after dropping `INDEX`) and 12795 observations. The remediation actions became apparent over the course of our exploratory data analysis:
+
+* There are numerous features with a weak relationship to `TARGET` that we'll consider at dropping.
+* There are outliers in every feature that will need to be addressed.
+* Imputing missing values will be an important factor in our modeling. From our analysis, KNN seems to be a logical choice since wines of similar compositions should have similar values.
+* Many of our predictors did not have a relationship with our target variable. As such, we may need to craft new features to extract additional signal.
+* Pay attention to multi-collinearity between `STARS` and `LabelAppeal` (what appear to be our 2 strongest predictors).
+
+The recommendations above provide a "starting line" for our data preparation.
+
+................................................................................
+
+
+# Data Preparation & Model Building
+
+With insights gained via EDA, we set out to explore different means of model optimization to (later) select the model with the strongest predictive capability when we cast our predictions. 
+
+We impute missing values, explore the performance of our "baseline model" (`model_1`), deal with multicollinearity / impertinent features, and hone our baseline model via outlier-handling, normalization, the exploration of over/underdispersion, AIC optimization and the numerous modeling methods (ie. Poisson vs. quasi-Poisson). 
+
+## Missing Value Imputation
+
+We compare the performance of KNN and predictive mean matching (PMM) imputation. We used both methods in our initial model run and observed that predictive mean matching performed slightly better than KNN. As such, we proceed with PMM.
+
+```{r, eval = T, echo = F}
+
+#MS Note: we can remove the 1st two chunks, just wanted to document applied methods.
+
+#kNN imputation - WORSE performance
+##motivating source: https://www.youtube.com/watch?v=u8XvfhBdbMw (~7:00)
+#summary(train3) #identify variables with missing values
+# final_df <- VIM::kNN(final_df, variable = c('STARS','ResidualSugar', 'Chlorides', 'FreeSulfurDioxide',  'Sulphates', 'Alcohol', 'TotalSulfurDioxide', 'pH' ), k = 3)
+#summary(imp_train3) #verify no NA's
+
+#Predictive mean matching - WORSE performance
+final_df <- mice(data = final_df, m = 1, method = "pmm", seed = 500)
+final_df <- mice::complete(final_df,1)
+
+#NA value removal - same performance
+#dim(train3) #12795 x 17
+#comp_train3 <- train3[complete.cases(train3), ]
+#dim(comp_train3) #9383 x 17
+
+final_df <- final_df %>%
+  mutate(TARGET = ifelse(dataset == "test", NA, TARGET)) %>% 
+  dplyr::select(-contains("_imp"))
+```
+
+```{r}
+colSums(is.na(final_df))
+```
+
+
+```{r aggr-plots2, results=F, fig.height=8, fig.width=15}
+VIM::aggr(final_df %>% filter(dataset == 'train'), col=c('green','red'), numbers=T, sortVars=T,
+          cex.axis = .7,
+          ylab=c("Proportion of Data", "Combinations and Percentiles"))
+```
+
+## Baseline model
+
+With our dataset properly shaped, and prior to any further dataset transformations or model extensions (ie. use of the quasi-Poisson model), we explore the performance of our "baseline model" (`model_1`):
+
+```{r}
+#Filter for training dataset and remove dataset variable:
+train2 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+#Baseline model (model 1): prior to data transformations
+model_1 <- glm(TARGET ~ ., train2, family = poisson(link = "log"))
+summary(model_1)
+
+```
+
+Our "baseline model" has:
+
+* A fair proportion of **high p-values** (ie.`FixedAcidity`) which may indicate a need for further variable exclusion. 
+* A **null deviance of 22861** and **residual deviance of 13527** on > 12000 degrees of freedom. Higher numbers indicate worse fit. We want lower deviance values.
+* An **AIC value of 45535**. The AIC value is a useful metric for model selection because it takes into account goodness of fit *and* model simplicity. We want a lower AIC value.
+
+Overall, our first model indicates that our model does not fit the data well. We are explaining ~41% (1 - 13,527/22,861) of the deviance of the data. 
+
+## Multicollinearity
+
+Having run our first model, we can check our multicollinearity: 
+
+```{r}
+car::vif(model_1)
+```
+
+Looking at the above output, our GVIF can be be squared and taken against the normal VIF rule of no greater than 5 or 10. In squaring any of these numbers, we see we would fall well below the 5 threshold, therefore, we conclude that multicollinearity is not an issue in this dataset. 
+
+## Outliers
+
+We can adjust the standard Poisson model to allow for more variation in the response. However, before doing that, we need to check whether the large size of deviance is related to outliers: 
+
+```{r}
+influencePlot(model_1)
+```
+
+In looking at the above plot, we do see several abnormal outliers. We took a look at those rows with a cook's distance greater than 4x the mean and noted that >250 observations met our outlier criteria. **While we had originally removed these observations from the dataset, it later caused an issue when casting predictions so we excluded outlier handling (code available in Appendix).**
+
+The write up that follows is how we had proceed prior to reaching that decision:
+
+```{r, include = F}
+#We did not end up using this section since predictions were not able to be cast when it was included
+cooksD <- cooks.distance(model_1)
+influential <- as.numeric(names(cooksD)[(cooksD > (4 * mean(cooksD, na.rm = TRUE)))])
+#influential
+```
+
+```{r, include = F}
+#comp_train3[influential,] #verify outliers - 121 rows
+#final_df <- final_df[-influential,]
+#final_df <- final_df[-c(1530,3258,5401,5538,3297,5467,5604,9205,10975),]
+train2 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+
+#Outlier model (model 3):
+#model_2 <- glm(TARGET ~ ., train2, family = poisson(link = "log"))
+#summary(model_2)
+```
+
+In removing several outliers, we improved the model slightly, checked our diagnostic plots, and noted that our residuals are not normal and don't have equal variance. Additionally, it looks like they have some curvature. This indicates that our data would likely benefit from some type of transformation. Additionally, the Poisson model is probably not the best model for this data. Before moving on, we explore whether over dispersion is an issue.  
+
+```{r, include = F}
+#glm.diag.plots(model_2)
+```
+
+## Over/Underdispersion
+
+We can get an approximation of the over/under dispersion using the Pearson's chi-squared statistic and degrees of freedom. 
+
+```{r, include = F}
+dispersiontest(model_1)
+```
+
+Based on the dispersion value, 0.8790033, it doesn't look like this dataset has a problem with over dispersion. We also see that our p-value is 1, which does not allow us to reject the null hypothesis. While over dispersion does not look to be an issue, we can run a quasi-Poisson model for completeness. The quasi-Poisson model integrates the dispersion parameter into the Poisson model. 
+
+## quasi-Poisson Model
+
+Being that our model is not fitting the data well, we elect to further explore the role of over-dispersion. We run a quasi-Poisson model, which estimates the dispersion parameter, in an attempt to mitigate its effects:
+
+```{r}
+model_3 <- glm(TARGET ~ ., family=quasipoisson, train2)
+summary(model_3)
+```
+
+In looking at the output above, we see that our standard error values have decreased slightly. However our null and residual deviance values haven't changed. Thus, it appears that the quasi-Poisson model offers a slightly better fit.
+
+From this point, we move on to the exploration of a negative binomial model to compare its results to those of our Poisson and quasi-Poisson models.
+
+## Negative Binomial Model 
+
+Negative binomial regression can be used for over-dispersed count data. We see this when the conditional variance exceeds the conditional mean. While we are not convinced the data is over-dispersed, we run the model for sake of completeness (to be able to rule it out). 
+
+Here we use `glm.nb` as it uses maximum likelihood to estimate the link parameter, $k$. $k$ corresponds to an assumption about the type of distribution of the response. 
+
+```{r}
+model4 <- glm.nb(TARGET ~ ., data = train2)
+summary(model4)
+```
+
+In looking at the above model, we see a worsened performance relative to the quasi-Poisson and thus we can rule out the negative binomial model as an effective solution.
+
+For the last modeling method to be explored, we'll look into the zero inflated count model.
+
+## Zero Inflated Count Models
+
+Zero-inflated poisson regression is used to model count data that has an excess of zero counts. In looking at our histogram above of `TARGET`, we have about 20%+ of our target variable containing 0s. Thus, the model appears to have promise and we'll explore its performance relative to that of the quasi Poisson model (our strongest yet):
+
+```{r}
+model5 <- zeroinfl(TARGET ~ ., data = train2)
+summary(model5)
+```
+
+We use the Vuong test to determine which model is better. Unfortunately, the `vuong` function does not accept the quasi-Poisson model as an input, but we can test the Poisson model which had similar, but slightly worse results.  
+
+```{r}
+pscl::vuong(model_1, model5)
+```
+
+We can see that our p-value is significant which tells us that the zero-inflated regression model is fitting better than the Poisson model. From this point, we move forward with the assumption that this model is our best fitting model. 
+
+Now that we've identified which modeling approach to take, we proceed to engineer features, normalize and optimize based on AIC value.
+
+## Feature Engineering
+
+We engineer features with the intention of expanding representative capabilities:
+
+```{r, include = F}
+round(final_df$Alcohol,0)
+```
+
+```{r}
+
+#Create new features (started with 1st, 3rd quartile values then adjusted):
+##high Density, Sulphates
+final_df$hiD_S <- as.factor(ifelse(final_df$Density >= 1.00 & final_df$Sulphates >= 0.00, 1, 0))
+##low Density, Sulphate, and Alcohol
+final_df$loDSA <- as.factor(ifelse(final_df$Density < 1.00 & final_df$Sulphates < 0.40 & final_df$Alcohol < 9.00, 1, 0))
+##High LabelAppeal, STARS, AcidIndex
+#final_df$LA_STARS_AI <- as.factor(ifelse(as.numeric(final_df$LabelAppeal) > 0 & as.numeric(final_df$STARS) > 2 & as.numeric(final_df$AcidIndex) > 9, 1, 0))
+##High AcidIndex, Alcohol 
+#final_df$hiAI_Alc <- as.factor(ifelse(as.numeric(final_df$AcidIndex) > 9 & final_df$Alcohol > 9, 1, 0))
+##Sweet Spot: Hi stars, Lower alcohol
+final_df$HiSTARS_Alc <- as.factor(ifelse(as.numeric(final_df$STARS) > 2 & final_df$Alcohol < 11.40, 1, 0))
+
+#head(final_df) #verify
+
+## Rounding
+final_df$FixedAcidity <- round(final_df$FixedAcidity,0)
+final_df$VolatileAcidity <- round(final_df$VolatileAcidity,1)
+final_df$CitricAcid <- round(final_df$CitricAcid,1)
+final_df$ResidualSugar <- round(final_df$ResidualSugar,0)
+final_df$Chlorides <- round(final_df$Chlorides,1)
+final_df$Density <- round(final_df$Density,2)
+final_df$pH <- round(final_df$pH,0)
+final_df$Sulphates <- round(final_df$Sulphates,1)
+final_df$Alcohol <- round(final_df$Alcohol,0)
+
+#Filter for training dataset and remove dataset variable:
+train3 <- final_df %>% filter(dataset == 'train') %>% dplyr::select(-dataset)
+#head(train3)
+
+#Baseline model (model 1): prior to data transformations
+model_6 <- zeroinfl(TARGET ~ ., data = train3)
+summary(model_6)
+```
+
+It appears that with the addition of new features and some rounding, our model provides a significantly better fit than it did before. 
+
+We now continue dataset transformations by exploring the effect of normalization.
+
+## Normalization
+
+Normalization of numeric variables reduced deviance, increased our standard error and led to an infinite AIC value (code available in Appendix). As such, we elected not to normalize our final model.
+
+```{r, include = F}
+
+#Normalize numeric variables to 0-to-1 scale: reduced deviance BUT caused infinite AIC ...
+norm_minmax <- function(x){(x- min(x)) /(max(x)-min(x))}
+
+original_target <- train3$TARGET
+
+norm_df <- train3 %>%
+  mutate_if(is.numeric, norm_minmax)
+
+norm_df$TARGET <- original_target
+
+model_7 <- zeroinfl(TARGET ~ ., data = norm_df)
+summary(model_7)
+
+```
+
+## AIC Optimization
+
+Before finalizing our model, we attempted to optimize our model's AIC value via application of the `stepAIC` function. The final steps of this function are shown below:
+
+```{r results = 'asis', out.width="800px"}
+download.file(url = paste0('https://github.com/christianthieme/',
+                        'Business-Analytics-and-Data-Mining-with-Regression/',
+                        'raw/main/AIC.jpg'),
+          destfile = "image2.jpg",
+          mode = 'wb')
+knitr::include_graphics(path = "image2.jpg")
+```
+
+<!-- ![](https://github.com/christianthieme/Business-Analytics-and-Data-Mining-with-Regression/raw/main/AIC.jpg){width=150%} -->
+
+Our last attempt at feature selection greatly reduced dimensions (dropping 5 variables) while having a significant positive impact on AIC value (improved to 39,545.35). As such, we proceed with this model.
+
+................................................................................
+
+
+# Model Selection 
+
+The model we selected from all of those we've explored upto this point, our final model, is a Zero Inflated Count Model with missing values imputed (via PMM imputation), outliers handled, features engineered, and features selected (through AIC optimization).
+
+The AIC value for our best model was significantly lower than all models we had seen prior, and while this number is nothing to get excited about (it's still quite high), we made significant inroads from when we set out with our "baseline" model.
+
+We run our final model and inspect its coefficients: 
+
+```{r}
+model_8 <- zeroinfl(TARGET ~ VolatileAcidity + Chlorides + FreeSulfurDioxide + TotalSulfurDioxide + 
+    pH + Sulphates + Alcohol + LabelAppeal + AcidIndex + STARS + 
+    loDSA + HiSTARS_Alc, data = train3)
+
+summary(model_8)
+```
+
+Below the model call, we observe first an an output block containing Poisson regression coefficients and then an output block corresponding to the zero inflation model. Each model contains standard errors, z-scores, and p-values for the coefficients where the second (zero inflation) block includes logit coefficients for predicting excess zeros along with their standard errors, z-scores, and p-values.
+
+To better interpret our zero inflation coefficients, we take the exponent of our log coefficients:
+
+```{r}
+round(exp(coef(model_8)),5)
+```
+
+Being that the exponent is the inverse of log, our resulting coefficients can be interpreted for predicting excess zeros. A higher variable value means a higher probability of excess zeros for that variable. From above, we observe that our highest coefficients and thus the variables most likely to have excess zeros are: `zero_HiSTARS_Alc1` (1797.67), `zero_STARS.C` (304.32), and `zero_AcidIndex.L` (63.86). In addition to the interpretive power of predicting the location and magnitude of zeros per variable, we may also interpret this finding as a sortof re-affirmation of our earlier finding that `STARS` and `AcidIndex` are highly correlated to our `TARGET` variable.
+
+Moving forward, we cast our predictions.
+
+## Predictions
+
+We select our test dataset, feed our model, and output the first 6 entries of our predictions and the corresponding summary statistics:
+
+```{r}
+#Prep data set: select test then drop dataset variable
+final_test <- final_df %>% filter(dataset == 'test') %>% dplyr::select(-dataset)
+
+#Baseline model predictions
+#predict1 <- predict(model_1, newdata=final_test, type="response")
+#round(predict1,0)
+#summary(predict1)
+
+#Cast predictions using model_8
+predict2 <- predict(model_8, newdata=final_test, type="response") 
+head(round(predict2,0))
+summary(predict2)
+
+```
+
+................................................................................
+
+# References
+
+* [GVIF](https://stats.stackexchange.com/questions/70679/which-variance-inflation-factor-should-i-be-using-textgvif-or-textgvif/96584#96584)
+* [Adjusting for Overdispersion in Poisson Regression](https://towardsdatascience.com/adjust-for-overdispersion-in-poisson-regression-4b1f52baa2f1)
+* [Overdispersion and Underdispersion in Negative Binomial/Poisson Regression](https://stats.stackexchange.com/questions/133635/overdispersion-and-underdispersion-in-negative-binomial-poisson-regression)
+* [Diagnostic Plots for Count Regression](https://stats.stackexchange.com/questions/70558/diagnostic-plots-for-count-regression)
+
+# Appendix `R` Statistical Code
+
+Below you'll find all the code we'd used in working our way through this assignment:
+
+```{r ref.label=knitr::all_labels(), echo=TRUE, eval=FALSE}
+```
+
+
+
+
