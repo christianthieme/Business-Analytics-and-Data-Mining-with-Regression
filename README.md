@@ -10,3 +10,5 @@
 
 #### [Car Insurance Analysis and Logistic Regression](https://rpubs.com/christianthieme/764382)
 
+#### [Poisson, quasi-Poisson, Negative Binomial, and Zero-Inflated Regression to Determine Wine Sales](https://rpubs.com/christianthieme/769409)
+
