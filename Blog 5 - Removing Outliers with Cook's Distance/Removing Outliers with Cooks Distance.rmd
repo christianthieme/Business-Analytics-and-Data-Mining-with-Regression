@@ -1,0 +1,70 @@
+---
+title: "Removing Outliers with Cook's Distance"
+author: "Christian Thieme"
+date: "5/14/2021"
+output:
+  prettydoc::html_pretty:
+    theme: tactile
+    highlight: github
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ISLR)
+library(tidyverse)
+```
+
+## Understanding How to Use Cook's Distance to Remove Outliers      
+
+There are many techniques to remove outliers from a dataset. One method that is often used in regression settings is utilizing Cook's Distance. Cook's distance is an estimate of the influence of a data point. It takes into account both the leverage and residual of each observation. Cook's distance is a summary of how much a regression model changes when the $i^{th}$ observation is removed. 
+
+When looking to see which observations may be outliers, a general rule of thumb is to investigate any point that is more than 3x the mean (*note: there are several other regularly used criteria as well*). I'll show an example of how this works with a well known dataset called Hitters from the `ISLR` library. The Hitters dataset contains information on 250+ baseball players and their career stats and salary. 
+
+First we'll import the dataset: 
+
+```{r}
+Hitters <- na.omit(Hitters)
+glimpse(Hitters)
+```
+Next, we'll initialize a multiple linear regression model using all the available features with the goal of prediction a player's salary. 
+
+```{r}
+model <- lm(Salary ~ ., data = Hitters)
+summary(model)
+```
+We see that our baseline model has an Adjusted $R^2$ of 0.5106. Now, let's look at the diagnostic plots:
+
+```{r fig.height=6, fig.width=8}
+par(mfrow = c(2, 2))
+plot(model)
+```
+
+In looking at the diagnostic plots we see that there are indeed some outliers (among other issues such as heteroscedasticity). If you look at the plot on the bottom right, *Residuals vs Leverage*, you'll see that some of the outliers have some significant leverage as well. Let's say for the sake of example, that we wanted to remove these outliers from our dataset so that we could have a better fitting model. How could we do that? We can utilize the `cooks.distance` function on the model we just ran and then filter out any values greater than 3x the mean. Let's first take a look at how many observations meet this criteria: 
+
+```{r}
+cooksD <- cooks.distance(model)
+influential <- cooksD[(cooksD > (3 * mean(cooksD, na.rm = TRUE)))]
+names_of_influential <- names(influential)
+influential
+```
+We see that 18 players have a Cook's distance greater than 3x the mean. Let's exclude these players and rerun the model to see if we have a better fit. 
+
+```{r message=FALSE, warning=FALSE}
+df <- Hitters[names_of_influential,]
+hitters_without_outliers <- Hitters %>% anti_join(df)
+
+model2 <- lm(Salary ~ ., data = hitters_without_outliers)
+summary(model2)
+```
+Our model fit has improved substantially. We have improved from an Adjusted $R^2$ of 0.5106 to 0.6445 with the removal of only 18 observations. This demonstrates how influential outliers can be in regression models. Let's look at the diagnostic plots for our new model.  
+
+```{r fig.height=6, fig.width=8}
+par(mfrow = c(2, 2))
+plot(model2)
+```
+
+In comparing with our previous diagnostic plots, these plots are greatly improved. Looking again at the *Residuals vs Leverage* plot, we see that we don't have any remaining points with *significant* leverage, leading to a better fit for our model. 
+
+The example above was for demonstration purposes only. One should never just remove outliers without doing a deep and thorough analysis of the points in question. Among other things, doing so might lead to a good fit on the training data, but poor predictions on unseen data.
+
+Cook's Distance is an excellent tool to add to your regression analysis toolbox! You now have a meaningful way to investigate outliers in your models. Happy modeling! 
