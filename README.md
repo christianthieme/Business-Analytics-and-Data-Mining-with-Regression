@@ -28,3 +28,5 @@
 
 #### [Understanding Common Classification Metrics — Titanic Style](https://towardsdatascience.com/understanding-common-classification-metrics-titanic-style-8b8a562d3e32)
 
+#### [Identifying Outliers in Linear Regression — Cook’s Distance](https://towardsdatascience.com/identifying-outliers-in-linear-regression-cooks-distance-9e212e9136a)
+
