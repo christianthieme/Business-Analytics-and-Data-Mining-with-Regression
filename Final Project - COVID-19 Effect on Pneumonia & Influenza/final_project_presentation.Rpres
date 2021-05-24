@@ -1,0 +1,204 @@
+Influenza and Pneumonia Mortality during the Global COVID-19 Pandemic and the Impact of Local Government Restrictions
+========================================================
+author: Angel Claudio, Bonnie Cooper, Manolis Manoli, Magnus Skonberg, Christian Thieme, Leo Yi
+date: "`r Sys.Date()`"
+autosize: true
+
+Communicable Disease during COVID-19
+========================================================
+<font size = "5px">
+<br> 
+The global COVID-19 pandemic has greatly impacted disease beyond direct cases of COVID-19.
+
+Reports have identified statistically significant decreases in diagnoses for communicable diseases such as pneumonia and influenza.$^{1,2,3}$   
+&nbsp;&nbsp;&nbsp;&nbsp;**Hypothesis 1:** Disease mitigation efforts (e.g. masks, social distancing) have directly reduced non-COVID disease cases.  
+<br>    
+Other reports show that while disease diagnostic rates have decreased for diseases such as heart attack and stroke, mortality rates for these diseases have increased during COVID.$^{4,5,6}$   
+&nbsp;&nbsp;&nbsp;&nbsp;**Hypothesis 2:** Changes in patient behavior and health care availability during the pandemic have led to missed cases of disease.  
+<br>    
+**Our Goal:** Use U.S. state-level disease data on pneumonia and influenza in conjunction with data on state government enforced COVID regulations to look for an association between disease and disease mitigation efforts.  
+&nbsp;&nbsp;&nbsp;&nbsp;If government restriction data significantly impacts the modeling of pneumonia and influenza mortality data, we interpret this as support for Hypothesis 1
+    
+</font>
+
+
+Pneumonia, Influenza and COVID-19 mortality in the U.S.
+========================================================
+<br>
+
+<font size = "5px">  
+
+* If PI deaths decreased during COVID, PI mortality should be below the expected rate.
+* However, here we observe that PI deaths during COVID are in excess and follow the trend of COVID data
+* Next, we quantify the excess PI deaths at the state-level  
+
+</font>
+
+***
+<br>
+![](https://raw.githubusercontent.com/SmilodonCub/DATA621/master/figure1.png)
+
+State-level excess Pneumonia and Influenza mortality
+========================================================
+<br>
+
+<font size = "5px">
+ 
+We measured the excess PI mortality as: 
+
+$$\mbox{Excess PI} = \\
+\mbox{max}( \mbox{PI}_{weekly} - \mbox{expected}_{weekly})$$
+
+Excess PI for the 2020-21 flu season is significantly different when compared to all other flu seasons in our dataset  
+
+Next, we look at the relationship of excess PI deaths and COVID related deaths
+
+</font>
+
+***
+<br>
+![](https://raw.githubusercontent.com/SmilodonCub/DATA621/master/figure2.png)  
+
+<font size = "5px">
+Figure A) state-level excess PI  
+Figure B) Tukey Honest Significant Differences of Means test
+</font>
+
+State-level relationship of excess PI mortality and PIC mortality
+========================================================
+<br>
+
+<font size = "5px">
+ 
+We observe a strong correlation between excess PI deaths and COVID related deaths  
+
+* States high in excess PI mortality are associated with high COVID-related deaths
+* A) State-level heat map for excess PI (top) and COVID related mortality (bottom)
+* B) Strong linear relationship between excess PI and COVID related deaths
+
+</font>
+
+***
+<br>
+![](https://raw.githubusercontent.com/SmilodonCub/DATA621/master/figure3.png)
+
+State-level Government COVID-19 Restriction Data
+========================================================
+<br>
+
+<font size = "5px">
+
+To test **Hypothesis 1** we incorporated state-level government restriction data  
+
+* This figure shows the most common levels of each government restriction categorical feature variable
+* We also added state-level demographic features such a population and population density
+
+</font>
+
+***
+<br>
+![](https://raw.githubusercontent.com/SmilodonCub/DATA621/master/figure4.png)
+
+
+Modeling Excess PI Mortality with Government Restriction Data
+========================================================
+<br>
+
+<font size = "5px">
+
+To model the impact of government restriction data on excess PI mortality, we used a simple linear regression model as a baseline (Model 1) and developed four additional models: 
+
+* **Model 2** - AIC step-wise multiple regression engineered binary variables to recode and simplify government restriction data.
+* **Model 3** - AIC step-wise multiple regression of categorical government restriction data + state-level demographic features
+* **Model 4** - Ridge-regression feature selection using Model 3 feature set
+* **Model 5** - Lasso-regression feature selection using Model 3 feature set
+
+</font>
+
+Model Comparison Table
+========================================================
+<br>
+```{r echo=F, message = F}
+library(kableExtra)
+#Create Kable table to succinctly summarize model optimization results
+Model <- c('1', '2', '3', '4', '5')
+Method <- c('Simple Linear', 'Mult. Linear', 'Mult. Linear', 'Ridge', 'Lasso')
+Var_Num <- c(1, 7, 8, 6, 6)
+R2_train <- c(0.8056, 0.8207, 0.8434, 0.8403, 0.8403)
+RMSE_train <- c(2.3288, 2.2255, 2.0714, 2.1129, 2.1129)
+R2_test <- c(0.8056, 0.8207, 0.8434, 0.7875, 0.7874) #this is where Regularization methods should shine ...
+RMSE_test <- c(2.5144, 2.3869, 2.3098, 2.3333, 2.3341)
+
+output <- cbind(Model, Method, Var_Num, R2_train, RMSE_train, R2_test, RMSE_test)
+
+output %>%
+  kbl(caption = "Regression Model Comparison") %>%
+  kable_minimal() %>%
+  kable_styling(latex_options = "hold_position")
+```
+
+<font size = "5px">
+
+**Table 1:** Model performance metrics used to evaluate and select from different modeling approaches
+
+</font>
+
+Model Selection
+========================================================
+
+<font size = "5px">
+
+* Model 3, the AIC step-wise multiple regression model, was selected due to it's parsimonious explanation of the data's variance balanced with fewer number of predictor variables.
+* Model 3 has a highly significant fit (p-val < 2.2e-16) and a high $R^2$ values
+* Model 3 results in a significantly lower residual sum of squares compared to the simple linear model (Model 1)
+* **Conclusion** including government restriction data resulted in a better description of excess PI mortality data
+
+</font>
+
+
+Model Evaluation
+========================================================
+<font size = "5px">
+
+Although our model improves upon the description of excess PI mortality, there is room for improvement: diagnostic plots reveal that residual variance is not constant across the model fit (left panel) and the normality plot of residuals suggests high-skewed distribution
+
+</font>
+![](https://raw.githubusercontent.com/SmilodonCub/DATA621/master/saving_mod3diagnostics.png)
+
+Summary & Conclusions
+========================================================
+<font size = "5px">
+
+* On a national level, U.S. PI deaths were significantly higher during the COVID-19 global pandemic. However, interpretation of this finding is complicated by the fact that pneumonia, influenza and COVID-19 cases and deaths data are confounded.$^{7,8}$
+* Incorporating state-level government regulation data resulted in a better description of excess PI mortality during the 2020-21 flu season. This supports **Hypothesis 1**
+* Model 3 is a first step towards modeling the impact of government regulations on communicable diseases during COVID. However, there is much room for improvement and many avenues for future research: 
+    - adding more features: government restriction &/or demographic variables
+    - extending the analysis to data from other countries or larger geographic scales
+    - focusing the analysis to data on a county/province/community scale 
+    - performing the same analysis after more time has been allowed to complete mortality records
+    
+</font>
+
+
+References
+========================================================
+<font size = "3px">
+
+1. Olsen SJ, Azziz-Baumgartner E, Budd AP, et al. Decreased influenza activity during the COVID-19 pandemic—United
+States, Australia, Chile, and South Africa, 2020. American Journal of Transplantation 2020; 20(12): 3681–3685.
+2. Angoulvant F, Ouldali N, Yang DD, et al. COVID-19 pandemic: impact caused by school closure and national lockdown on
+pediatric visits and admissions for viral and non-viral infections, a time series analysis. Clinical Infectious Diseases 2020.
+3. Chiu NC, Chi H, Tai YL, et al. Impact of wearing masks, hand hygiene, and social distancing on influenza, enterovirus, and
+all-cause pneumonia during the coronavirus pandemic: Retrospective national epidemiological surveillance study. Journal
+of Medical Internet Research 2020; 22(8): e21257.
+4. Baldi E, Sechi GM, Mare C, et al. COVID-19 kills at home: the close relationship between the epidemic and the increase
+of out-of-hospital cardiac arrests. European heart journal 2020; 41(32): 3045–3054.
+5. Wadhera RK, Shen C, Gondi S, Chen S, Kazi DS, Yeh RW. Cardiovascular deaths during the COVID-19 pandemic in the
+United States. Journal of the American College of Cardiology 2021; 77(2): 159–169.
+6. Sharma R, Kuohn LR, Weinberger DM, et al. Excess Cerebrovascular Mortality in the United States During the COVID-19
+Pandemic. Stroke 2020: STROKEAHA–120.
+7. Beusekom MV. About 30% of COVID deaths may not be classified as such. 2020.
+8. Faust JS, Del Rio C. Assessment of deaths from COVID-19 and from seasonal influenza. JAMA internal medicine 2020;
+180(8): 1045–1046.
+
+</font>
